@@ -4,6 +4,7 @@ Worker - 任务执行器
 负责从队列获取数据并执行 Task
 """
 
+import asyncio
 import logging
 import signal
 import time
@@ -256,8 +257,8 @@ class Worker:
                     log_prefix = f"[{consumer_name}] " if consumer_name else ""
                     self.logger.info(f"{log_prefix}Processing task '{task_name}': {msg_id}")
 
-                # 执行任务
-                task.run(task_data)
+                # 执行任务（异步）
+                asyncio.run(task.run(task_data))
 
                 # 处理通过 task.callback() 提交的任务
                 if task._pending_callbacks:

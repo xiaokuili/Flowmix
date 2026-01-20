@@ -4,6 +4,8 @@ Task - 任务定义
 通过装饰器注册执行函数和钩子函数
 """
 
+import asyncio
+import inspect
 from typing import Callable, Optional, Any
 
 
@@ -190,15 +192,15 @@ class Task:
             'priority': priority
         })
 
-    def run(self, data: dict) -> Any:
+    async def run(self, data: dict) -> Any:
         """
         执行任务（内部使用，由 Worker 调用）
 
         执行流程：
         1. 清空待提交任务列表
-        2. 调用 execute(data)
-        3. 成功 -> 调用 on_success(data, result)
-        4. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常
+        2. 调用 execute(data) - 支持同步和异步
+        3. 成功 -> 调用 on_success(data, result) - 支持同步和异步
+        4. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常 - 支持同步和异步
 
         Args:
             data: 输入数据
@@ -217,20 +219,29 @@ class Task:
         self._pending_callbacks.clear()
 
         try:
-            # 执行核心逻辑
-            result = self._execute_func(data)
+            # 执行核心逻辑（支持同步和异步）
+            if inspect.iscoroutinefunction(self._execute_func):
+                result = await self._execute_func(data)
+            else:
+                result = self._execute_func(data)
 
-            # 调用成功回调
+            # 调用成功回调（支持同步和异步）
             if self._on_success_func:
-                self._on_success_func(data, result)
+                if inspect.iscoroutinefunction(self._on_success_func):
+                    await self._on_success_func(data, result)
+                else:
+                    self._on_success_func(data, result)
 
             return result
 
         except Exception as error:
-            # 调用失败回调
+            # 调用失败回调（支持同步和异步）
             if self._on_failure_func:
                 try:
-                    self._on_failure_func(data, error)
+                    if inspect.iscoroutinefunction(self._on_failure_func):
+                        await self._on_failure_func(data, error)
+                    else:
+                        self._on_failure_func(data, error)
                 except Exception as callback_error:
                     # 如果回调本身失败，记录但不影响原始异常
                     print(f"Warning: on_failure callback raised exception: {callback_error}")

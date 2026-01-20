@@ -29,6 +29,7 @@ Worker (执行器)
 - ✅ **持久化**：任务数据持久化存储，进程重启不丢失
 - ✅ **并发安全**：支持多线程并发处理
 - ✅ **简单易用**：装饰器风格 API，上手即用
+- ✅ **Async/Await**：完整支持异步函数，自动检测同步/异步
 
 ## 快速开始
 
@@ -39,7 +40,7 @@ Worker (执行器)
 pip install flowmix
 ```
 
-### 基础用法
+### 基础用法（同步）
 
 ```python
 from flowmix import Task, Manager, Worker
@@ -72,7 +73,7 @@ manager.push({"url": "http://example.com"})
 
 # 4. 创建 Worker
 worker = Worker(
-    task=task,
+    tasks=task,
     manager=manager,
     num_workers=5,      # 5 个并发
     max_retries=3,      # 失败后重试 3 次
@@ -83,12 +84,54 @@ worker = Worker(
 worker.run()
 ```
 
+### 异步用法（Async/Await）
+
+```python
+import asyncio
+from flowmix import Task, Manager, Worker
+
+# 1. 定义异步 Task
+task = Task()
+
+@task.execute
+async def process_url(data: dict):
+    """异步处理 URL"""
+    url = data['url']
+    print(f"Processing: {url}")
+
+    # 异步 I/O 操作
+    await asyncio.sleep(0.5)
+
+    return {"url": url, "status": "ok"}
+
+@task.on_success
+async def save_result(data: dict, result):
+    """异步保存结果"""
+    # 异步数据库操作
+    await asyncio.sleep(0.1)
+    print(f"✅ Success: {result}")
+
+@task.on_failure
+async def handle_error(data: dict, error: Exception):
+    """异步处理错误"""
+    print(f"❌ Failed: {error}")
+
+# 2-5. 其余步骤与同步模式完全相同
+manager = Manager(db_path="flowmix.db")
+manager.push({"url": "http://example.com"})
+
+worker = Worker(tasks=task, manager=manager, num_workers=5)
+worker.run()
+```
+
 ## 运行示例
 
 ```bash
-# 发布任务
+# 同步示例
 python examples/simple_example.py publish
-
-# 启动 Worker
 python examples/simple_example.py worker
+
+# 异步示例
+python examples/async_example.py publish
+python examples/async_example.py worker
 ```

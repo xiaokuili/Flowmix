@@ -1,46 +1,51 @@
 """
-最简单的 Flowmix 示例
+Flowmix 异步示例
 
 演示：
-1. 定义 Task
+1. 使用 async/await 定义异步 Task
 2. 发布任务
-3. 启动 Worker
+3. 启动 Worker 执行异步任务
 """
 
-import time
+import asyncio
 from flowmix import Task, Manager, Worker
 
 
 # ==========================================
-# 1. 定义 Task
+# 1. 定义异步 Task
 # ==========================================
 
 task = Task()
 
 
 @task.execute
-def process_url(data: dict):
-    """处理 URL"""
+async def process_url(data: dict):
+    """异步处理 URL"""
     url = data['url']
     print(f"Processing: {url}")
 
-    # 模拟处理
-    time.sleep(0.5)
+    # 模拟异步 I/O 操作（如网络请求）
+    await asyncio.sleep(0.5)
 
     return {"url": url, "status": "ok"}
 
 
 @task.on_success
-def save_result(data: dict, result):
-    """成功后保存"""
+async def save_result(data: dict, result):
+    """异步保存结果"""
     print(f"✅ Success: {result}")
-    
+
+    # 模拟异步数据库操作
+    await asyncio.sleep(0.1)
 
 
 @task.on_failure
-def handle_error(data: dict, error: Exception):
-    """失败后处理"""
+async def handle_error(data: dict, error: Exception):
+    """异步处理错误"""
     print(f"❌ Failed: {data['url']} - {error}")
+
+    # 模拟异步日志记录
+    await asyncio.sleep(0.1)
 
 
 # ==========================================
@@ -53,11 +58,13 @@ def publish():
 
     manager = Manager(db_path="flowmix.db")
 
-    # 发布 3 个任务
+    # 发布 5 个任务
     urls = [
         "http://example.com/1",
         "http://example.com/2",
         "http://example.com/3",
+        "http://example.com/4",
+        "http://example.com/5",
     ]
 
     for url in urls:
@@ -74,7 +81,7 @@ def publish():
 
 def start_worker():
     """启动 Worker 消费任务"""
-    print("\n🚀 Starting worker...\n")
+    print("\n🚀 Starting async worker...\n")
 
     manager = Manager(db_path="flowmix.db")
 
@@ -105,8 +112,8 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  python simple_example.py publish   # 发布任务")
-        print("  python simple_example.py worker    # 启动 Worker")
+        print("  python async_example.py publish   # 发布任务")
+        print("  python async_example.py worker    # 启动 Worker")
         sys.exit(1)
 
     command = sys.argv[1]
