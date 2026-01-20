@@ -40,13 +40,41 @@ class Task:
         # 使用
         worker = Worker(task=task, manager=manager)
         worker.run()
+
+    动态回调任务（callback）:
+        # 在执行函数中调用 task.callback() 回调其他任务
+        crawl_task = Task(name='crawl')
+
+        @crawl_task.execute
+        def crawl(data):
+            html = fetch(data['url'])
+            links = parse_links(html)
+
+            # 回调任务（可以是自己或其他任务）
+            for link in links:
+                crawl_task.callback('crawl', {'url': link}, priority=10)  # DFS
+
+            return html
+
+        # 优先级说明：
+        # - priority 越大越优先执行
+        # - 高优先级 -> 深度优先（DFS）：先处理新发现的任务
+        # - 低优先级 -> 广度优先（BFS）：先处理旧任务
     """
 
-    def __init__(self):
-        """初始化 Task"""
+    def __init__(self, name: Optional[str] = None):
+        """
+        初始化 Task
+
+        Args:
+            name: Task 名称（用于 Worker 路由和 callback）
+        """
+        self.name = name
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
+        # 存储待回调的任务（每次执行前清空）
+        self._pending_callbacks: list[dict] = []
 
     def execute(self, func: Callable[[dict], Any]) -> Callable:
         """
@@ -56,16 +84,30 @@ class Task:
             func: 执行函数 (data: dict) -> Any
                  - 接收输入数据 data
                  - 返回执行结果（传递给 on_success）
+                 - 可选：返回 {'submit': [...]} 动态提交新任务
                  - 抛出异常会触发 on_failure
 
         Returns:
             原函数（支持装饰器语法）
 
         Example:
+            # 简单返回结果
             @task.execute
             def my_execute(data):
                 url = data['url']
                 return fetch(url)
+
+            # 动态回调任务（爬虫示例）
+            @task.execute
+            def crawl(data):
+                html = fetch(data['url'])
+                links = parse_links(html)
+
+                # 调用 task.callback() 回调任务
+                for link in links:
+                    task.callback('crawl', {'url': link}, priority=10)
+
+                return html
         """
         self._execute_func = func
         return func
@@ -116,14 +158,47 @@ class Task:
         self._on_failure_func = func
         return func
 
+    def callback(self, task_name: str, data: dict, priority: int = 0):
+        """
+        回调其他任务（由 Worker 负责实际提交到队列）
+
+        在 execute() 函数中调用此方法，将回调信息记录下来。
+        Worker 会在任务执行完成后自动将这些任务提交到队列。
+
+        Args:
+            task_name: 要回调的任务名称（Worker 会根据此名称路由到对应的 Task）
+            data: 任务数据（字典）
+            priority: 优先级（默认 0，数字越大越优先）
+                     - 高优先级 -> 深度优先（DFS）
+                     - 低优先级 -> 广度优先（BFS）
+
+        Example:
+            @task.execute
+            def crawl(data):
+                html = fetch(data['url'])
+                links = parse_links(html)
+
+                # 回调自己或其他任务
+                for link in links:
+                    task.callback('crawl', {'url': link}, priority=10)
+
+                return html
+        """
+        self._pending_callbacks.append({
+            'task_name': task_name,
+            'data': data,
+            'priority': priority
+        })
+
     def run(self, data: dict) -> Any:
         """
         执行任务（内部使用，由 Worker 调用）
 
         执行流程：
-        1. 调用 execute(data)
-        2. 成功 -> 调用 on_success(data, result)
-        3. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常
+        1. 清空待提交任务列表
+        2. 调用 execute(data)
+        3. 成功 -> 调用 on_success(data, result)
+        4. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常
 
         Args:
             data: 输入数据
@@ -137,6 +212,9 @@ class Task:
         """
         if self._execute_func is None:
             raise RuntimeError("Task.execute() is not defined. Use @task.execute to register execute function.")
+
+        # 清空待回调任务列表
+        self._pending_callbacks.clear()
 
         try:
             # 执行核心逻辑

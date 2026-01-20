@@ -34,6 +34,7 @@ def process_url(data: dict):
 def save_result(data: dict, result):
     """成功后保存"""
     print(f"✅ Success: {result}")
+    
 
 
 @task.on_failure

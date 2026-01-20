@@ -97,44 +97,49 @@ class Manager:
             CREATE TABLE IF NOT EXISTS {self.queue_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 data TEXT NOT NULL,
+                priority INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'pending',
                 consumer TEXT,
                 created_at REAL DEFAULT (julianday('now')),
                 updated_at REAL DEFAULT (julianday('now'))
             )
         """)
-        # 创建索引加速查询
+        # 创建索引加速查询（优先级降序，ID 升序）
         conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_status
-            ON {self.queue_name}(status, id)
+            ON {self.queue_name}(status, priority DESC, id ASC)
         """)
         conn.commit()
 
-    def push(self, data: Dict[str, Any]) -> int:
+    def push(self, data: Dict[str, Any], priority: int = 0) -> int:
         """
         将消息放入队列
 
         Args:
             data: 消息数据（任意字典）
+            priority: 优先级（默认 0，数字越大越优先）
+                     - 用于实现 DFS（深度优先）：新任务设置高优先级
+                     - 用于实现 BFS（广度优先）：新任务设置低优先级
 
         Returns:
             消息 ID
 
         Example:
-            msg_id = manager.push({
-                "url": "http://example.com",
-                "priority": 10
-            })
+            # 普通任务
+            msg_id = manager.push({"url": "http://example.com"})
+
+            # 高优先级任务（DFS）
+            msg_id = manager.push({"url": "http://example.com"}, priority=10)
         """
         conn = self._get_connection()
         cursor = conn.execute(
-            f"INSERT INTO {self.queue_name} (data) VALUES (?)",
-            (json.dumps(data),)
+            f"INSERT INTO {self.queue_name} (data, priority) VALUES (?, ?)",
+            (json.dumps(data), priority)
         )
         conn.commit()
 
         msg_id = cursor.lastrowid
-        self.logger.debug(f"Pushed message {msg_id} to queue")
+        self.logger.debug(f"Pushed message {msg_id} to queue (priority={priority})")
         return msg_id
 
     def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
@@ -165,7 +170,7 @@ class Manager:
                 cursor = conn.execute(f"""
                     SELECT id, data FROM {self.queue_name}
                     WHERE status = 'pending'
-                    ORDER BY id ASC
+                    ORDER BY priority DESC, id ASC
                     LIMIT 1
                 """)
 

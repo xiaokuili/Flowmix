@@ -7,7 +7,7 @@ Worker - 任务执行器
 import logging
 import signal
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .manager import Manager
@@ -53,7 +53,7 @@ class Worker:
 
     def __init__(
         self,
-        task: Task,
+        tasks: Union[Task, Dict[str, Task]],
         manager: Manager,
         name: Optional[str] = None,
         num_workers: int = 1,
@@ -64,14 +64,23 @@ class Worker:
         初始化 Worker
 
         Args:
-            task: Task 实例（定义了执行逻辑）
+            tasks: Task 实例或 Task 字典 {task_name: Task}
+                  - 单个 Task: 兼容旧版本
+                  - 字典: 支持多个 Task，基于 task_name 路由
             manager: Manager 实例（队列管理器）
             name: Worker 名称（默认自动生成）
             num_workers: 并发处理的 worker 数量（默认 1，即单线程）
             max_retries: 失败后最大重试次数（默认 0，即不重试）
             retry_delay: 重试间隔秒数（默认 0，即立即重试）
         """
-        self.task = task
+        # 统一处理为字典格式
+        if isinstance(tasks, Task):
+            # 单个 Task，使用其 name 作为 key（兼容旧版本）
+            task_name = tasks.name or 'default'
+            self.tasks = {task_name: tasks}
+        else:
+            self.tasks = tasks
+
         self.manager = manager
         self.name = name or self._generate_name()
         self.num_workers = max(1, num_workers)  # 至少 1 个
@@ -208,17 +217,28 @@ class Worker:
         Args:
             msg: 从 Manager.pop() 返回的消息
                 - msg["id"]: 消息 ID（用于 ack）
+                - msg["task_name"]: 任务名称（用于路由）
                 - msg["data"]: 业务数据（传给 Task）
             consumer_name: 消费者名称（用于日志）
         """
         msg_id = msg["id"]
 
-        # 提取任务数据
+        # 提取任务名称和数据
+        task_name = msg.get("task_name", "default")
         if "data" in msg:
             task_data = msg["data"]
         else:
-            # 去掉 "id" 字段，剩下的都是业务数据
-            task_data = {k: v for k, v in msg.items() if k != "id"}
+            # 去掉 "id" 和 "task_name" 字段，剩下的都是业务数据
+            task_data = {k: v for k, v in msg.items() if k not in ("id", "task_name")}
+
+        # 根据 task_name 找到对应的 Task
+        task = self.tasks.get(task_name)
+        if not task:
+            self.logger.error(
+                f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
+            )
+            self.manager.ack(msg_id)
+            return
 
         # 执行任务（带重试）
         retry_count = 0
@@ -229,15 +249,32 @@ class Worker:
                 if retry_count > 0:
                     log_prefix = f"[{consumer_name}] " if consumer_name else ""
                     self.logger.info(
-                        f"{log_prefix}Processing message: {msg_id} "
+                        f"{log_prefix}Processing task '{task_name}': {msg_id} "
                         f"(retry {retry_count}/{self.max_retries})"
                     )
                 else:
                     log_prefix = f"[{consumer_name}] " if consumer_name else ""
-                    self.logger.info(f"{log_prefix}Processing message: {msg_id}")
+                    self.logger.info(f"{log_prefix}Processing task '{task_name}': {msg_id}")
 
                 # 执行任务
-                self.task.run(task_data)
+                task.run(task_data)
+
+                # 处理通过 task.callback() 提交的任务
+                if task._pending_callbacks:
+                    for callback_info in task._pending_callbacks:
+                        callback_task_name = callback_info['task_name']
+                        callback_data = callback_info['data']
+                        callback_priority = callback_info['priority']
+
+                        # 将 task_name 和 data 合并提交到队列
+                        message = {
+                            'task_name': callback_task_name,
+                            **callback_data
+                        }
+                        self.manager.push(message, priority=callback_priority)
+                        self.logger.debug(
+                            f"Callback task '{callback_task_name}' with priority {callback_priority}: {callback_data}"
+                        )
 
                 # 任务成功
                 self.stats["processed"] += 1
@@ -247,13 +284,13 @@ class Worker:
                 self.manager.ack(msg_id)
 
                 log_prefix = f"[{consumer_name}] " if consumer_name else ""
-                self.logger.info(f"{log_prefix}Message {msg_id} completed successfully")
+                self.logger.info(f"{log_prefix}Task '{task_name}' {msg_id} completed successfully")
                 return
 
             except Exception as e:
                 last_error = e
                 self.logger.error(
-                    f"Message {msg_id} failed (attempt {retry_count + 1}): {e}",
+                    f"Task '{task_name}' {msg_id} failed (attempt {retry_count + 1}): {e}",
                     exc_info=True
                 )
 
@@ -265,7 +302,7 @@ class Worker:
                     # 延迟
                     if self.retry_delay > 0:
                         self.logger.info(
-                            f"Retrying message {msg_id} in {self.retry_delay}s..."
+                            f"Retrying task '{task_name}' {msg_id} in {self.retry_delay}s..."
                         )
                         time.sleep(self.retry_delay)
                 else:
@@ -277,7 +314,7 @@ class Worker:
         self.stats["failed"] += 1
 
         self.logger.error(
-            f"Message {msg_id} permanently failed after {self.max_retries} retries: {last_error}"
+            f"Task '{task_name}' {msg_id} permanently failed after {self.max_retries} retries: {last_error}"
         )
 
         # 确认消息（不再重试）
