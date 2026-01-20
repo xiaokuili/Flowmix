@@ -10,7 +10,8 @@
   ✅ 必须做（核心流程）                                                         
                                                                                 
   1. 任务定义 (2小时)                                                           
-                                                                                
+
+  ```                                                                              
   from flowmix import Task                                                      
                                                                                 
   task = Task(name="demo")                                                      
@@ -28,7 +29,7 @@
       print(item)                                                               
                                                                                 
   task.run()  # 执行                                                            
-                                                                                
+```                                                                                
   范围：                                                                        
   - ✅ 装饰器：@task.source / @task.processor / @task.sink                      
   - ✅ 自动串联流水线                                                           
@@ -37,7 +38,7 @@
                                                                                 
   ---                                                                           
   2. 并发控制（2小时）                                                          
-                                                                                
+ ```                                                                               
   from flowmix import ConcurrencyLimiter                                        
                                                                                 
   limiter = ConcurrencyLimiter(max_workers=5)                                   
@@ -46,7 +47,7 @@
   def process(item):                                                            
       # 自动限制并发                                                            
       return llm_call(item)                                                     
-                                                                                
+```                                                                                
   范围：                                                                        
   - ✅ 线程池限制并发数                                                         
   - ✅ 简单计数器（不做复杂的rate limiting）                                    
@@ -71,7 +72,7 @@
                                                                                 
   ---                                                                           
   4. HTTP请求（1.5小时）                                                        
-                                                                                
+  ```                                                                              
   from flowmix.sources import http_source                                       
                                                                                 
   @task.source()                                                                
@@ -80,7 +81,7 @@
           url="https://api.example.com/data",                                   
           headers={"Authorization": "Bearer xxx"}                               
       )                                                                         
-                                                                                
+ ```                                                                               
   范围：                                                                        
   - ✅ GET请求                                                                  
   - ✅ 基础认证（headers）                                                      
@@ -89,7 +90,7 @@
                                                                                 
   ---                                                                           
   5. LLM调用（1.5小时）                                                         
-                                                                                
+ ```                                                                               
   from flowmix.processors import llm                                            
                                                                                 
   @task.processor()                                                             
@@ -99,7 +100,7 @@
           provider="openai",                                                    
           model="gpt-4"                                                         
       )                                                                         
-                                                                                
+ ```                                                                               
   范围：                                                                        
   - ✅ OpenAI API调用                                                           
   - ✅ 简单prompt（字符串拼接）                                                 
@@ -108,7 +109,7 @@
                                                                                 
   ---                                                                           
   6. 数据库存储（1.5小时）                                                      
-                                                                                
+ ```                                                                               
   from flowmix.storage import postgres                                          
                                                                                 
   @task.sink()                                                                  
@@ -118,7 +119,7 @@
           data=item,                                                            
           connection="postgresql://..."                                         
       )                                                                         
-                                                                                
+```                                                                                
   范围：                                                                        
   - ✅ PostgreSQL插入                                                           
   - ✅ 自动建表（简单推断类型）                                                 
@@ -161,21 +162,8 @@
   - ❌ 所有高级功能                                                             
                                                                                 
   ---                                                                           
-  1天开发计划                                                                   
-                                                                                
-  上午（4小时）：                                                               
-  09:00-10:00  项目脚手架 + Task装饰器                                          
-  10:00-11:00  并发控制（线程池）                                               
-  11:00-12:00  日志系统（基础打印）                                             
-  12:00-13:00  HTTP请求封装                                                     
-                                                                                
-  下午（4小时）：                                                               
-  14:00-15:00  LLM调用（OpenAI）                                                
-  15:00-16:00  PostgreSQL存储                                                   
-  16:00-17:00  成本统计 + CLI                                                   
-  17:00-18:00  跑通完整demo + 修bug                                             
-                                                                                
-  ---                                                                           
+                                                                        
+```                                                                       
   完整Demo示例                                                                  
                                                                                 
   # demo.py                                                                     
@@ -238,7 +226,7 @@
   [14:00:16] [INFO] Task completed in 16s                                       
   [14:00:16] [INFO] Cost: $0.15 (OpenAI: 1500 tokens)                           
                                                                                 
-  ---                                                                           
+```                                                                          
   项目结构                                                                      
                                                                                 
   flowmix/                                                                      
