@@ -37,11 +37,13 @@ Example:
 from .task import Task
 from .manager import Manager
 from .worker import Worker
+from .limiter import ConcurrencyLimiter
 
 __all__ = [
     "Task",
     "Manager",
     "Worker",
+    "ConcurrencyLimiter",
 ]
 
 __version__ = "0.2.0"

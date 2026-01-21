@@ -42,5 +42,8 @@ htmlcov/
 *.db-shm
 *.db-wal
 
+# Flowmix data directory
+.flowmix/
+
 # Claude Code
 .claude/

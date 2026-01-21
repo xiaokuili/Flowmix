@@ -64,14 +64,18 @@ class Task:
         # - 低优先级 -> 广度优先（BFS）：先处理旧任务
     """
 
-    def __init__(self, name: Optional[str] = None):
+    def __init__(self, name: Optional[str] = None, concurrency_limit: Optional[int] = None):
         """
         初始化 Task
 
         Args:
             name: Task 名称（用于 Worker 路由和 callback）
+            concurrency_limit: 每秒最大并发数（默认 None，表示无限制）
+                              - 基于滑动窗口算法控制并发
+                              - 例如：concurrency_limit=10 表示每秒最多执行 10 个任务
         """
         self.name = name
+        self.concurrency_limit = concurrency_limit
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
