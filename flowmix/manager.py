@@ -102,12 +102,15 @@ class Manager:
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.queue_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER,
                 data TEXT NOT NULL,
                 priority INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'pending',
                 consumer TEXT,
+                error TEXT,
                 created_at REAL DEFAULT (julianday('now')),
-                updated_at REAL DEFAULT (julianday('now'))
+                updated_at REAL DEFAULT (julianday('now')),
+                completed_at REAL
             )
         """)
         # 创建索引加速查询（优先级降序，ID 升序）
@@ -115,9 +118,14 @@ class Manager:
             CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_status
             ON {self.queue_name}(status, priority DESC, id ASC)
         """)
+        # 创建索引加速 parent_id 查询
+        conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_parent
+            ON {self.queue_name}(parent_id)
+        """)
         conn.commit()
 
-    def push(self, data: Dict[str, Any], priority: int = 0) -> int:
+    def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None) -> int:
         """
         将消息放入队列
 
@@ -126,26 +134,30 @@ class Manager:
             priority: 优先级（默认 0，数字越大越优先）
                      - 用于实现 DFS（深度优先）：新任务设置高优先级
                      - 用于实现 BFS（广度优先）：新任务设置低优先级
+            parent_id: 父任务 ID（用于构建任务树，默认 None 表示根任务）
 
         Returns:
             消息 ID
 
         Example:
-            # 普通任务
-            msg_id = manager.push({"url": "http://example.com"})
+            # 根任务
+            root_id = manager.push({"url": "http://example.com"})
+
+            # 子任务
+            child_id = manager.push({"url": "http://example.com/page1"}, parent_id=root_id)
 
             # 高优先级任务（DFS）
             msg_id = manager.push({"url": "http://example.com"}, priority=10)
         """
         conn = self._get_connection()
         cursor = conn.execute(
-            f"INSERT INTO {self.queue_name} (data, priority) VALUES (?, ?)",
-            (json.dumps(data), priority)
+            f"INSERT INTO {self.queue_name} (data, priority, parent_id) VALUES (?, ?, ?)",
+            (json.dumps(data), priority, parent_id)
         )
         conn.commit()
 
         msg_id = cursor.lastrowid
-        self.logger.debug(f"Pushed message {msg_id} to queue (priority={priority})")
+        self.logger.debug(f"Pushed message {msg_id} to queue (priority={priority}, parent_id={parent_id})")
         return msg_id
 
     def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
@@ -225,25 +237,35 @@ class Manager:
                     self.logger.error(f"Database error: {e}")
                     return None
 
-    def ack(self, message_id: int):
+    def ack(self, message_id: int, failed: bool = False, error: str = None):
         """
-        确认消息已处理（删除消息）
+        确认消息已处理（标记为 completed/failed，不再删除以保留任务树结构）
 
         Args:
             message_id: 消息 ID（从 pop() 返回的 "id" 字段）
+            failed: 是否失败（默认 False）
+            error: 失败原因（可选，仅在 failed=True 时有效）
 
         Example:
             msg = manager.pop("worker-1")
             # ... 处理消息 ...
+
+            # 成功
             manager.ack(msg["id"])
+
+            # 失败
+            manager.ack(msg["id"], failed=True, error="Connection timeout")
         """
         conn = self._get_connection()
+        status = 'failed' if failed else 'completed'
         conn.execute(
-            f"DELETE FROM {self.queue_name} WHERE id = ?",
-            (message_id,)
+            f"""UPDATE {self.queue_name}
+                SET status = ?, error = ?, completed_at = julianday('now'), updated_at = julianday('now')
+                WHERE id = ?""",
+            (status, error, message_id)
         )
         conn.commit()
-        self.logger.debug(f"ACKed (deleted) message {message_id}")
+        self.logger.debug(f"ACKed message {message_id} as {status}")
 
     def get_pending_count(self) -> int:
         """
@@ -279,6 +301,109 @@ class Manager:
         conn.execute(f"DELETE FROM {self.queue_name}")
         conn.commit()
         self.logger.warning("Cleared all messages from queue")
+
+    def get_task_info(self, task_id: int) -> Optional[dict]:
+        """
+        获取任务详情
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            任务详情字典，如果不存在返回 None
+
+        Example:
+            info = manager.get_task_info(123)
+            print(info)
+            # {
+            #     'id': 123,
+            #     'parent_id': 100,
+            #     'data': '{"url": "..."}',
+            #     'status': 'completed',
+            #     'error': None,
+            #     ...
+            # }
+        """
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE id = ?",
+            (task_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+    def get_children(self, parent_id: int) -> list:
+        """
+        获取所有直接子任务
+
+        Args:
+            parent_id: 父任务 ID
+
+        Returns:
+            子任务列表
+
+        Example:
+            children = manager.get_children(100)
+            for child in children:
+                print(f"子任务 {child['id']}: {child['status']}")
+        """
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE parent_id = ? ORDER BY id ASC",
+            (parent_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_tree_stats(self, root_id: int) -> dict:
+        """
+        获取任务树的统计信息（递归查询所有子孙任务）
+
+        Args:
+            root_id: 根任务 ID
+
+        Returns:
+            统计字典，包含 total, pending, processing, completed, failed
+
+        Example:
+            stats = manager.get_tree_stats(100)
+            print(stats)
+            # {
+            #     'total': 150,
+            #     'pending': 10,
+            #     'processing': 5,
+            #     'completed': 130,
+            #     'failed': 5
+            # }
+        """
+        conn = self._get_connection()
+
+        # 使用 CTE 递归查询整棵树
+        cursor = conn.execute(f"""
+            WITH RECURSIVE tree AS (
+                SELECT * FROM {self.queue_name} WHERE id = ?
+                UNION ALL
+                SELECT t.* FROM {self.queue_name} t
+                INNER JOIN tree ON t.parent_id = tree.id
+            )
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+            FROM tree
+        """, (root_id,))
+
+        row = cursor.fetchone()
+        return {
+            "total": row["total"] or 0,
+            "pending": row["pending"] or 0,
+            "processing": row["processing"] or 0,
+            "completed": row["completed"] or 0,
+            "failed": row["failed"] or 0,
+        }
 
     def close(self):
         """关闭数据库连接"""

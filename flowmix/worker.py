@@ -7,9 +7,7 @@ Worker - 任务执行器
 import asyncio
 import logging
 import signal
-import time
 from typing import Optional, Dict, Any, Union, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .manager import Manager
 from .task import Task
@@ -17,45 +15,53 @@ from .task import Task
 
 class Worker:
     """
-    Worker - 任务执行器
+    Worker - 任务管理器
 
     职责：
-    - 从 Manager 获取消息（字典数据）
-    - 调用 Task.run(data) 执行任务
-    - 处理任务执行的成功和失败
-    - 支持并发处理（多线程）
+    - 提交任务到队列（push）
+    - 执行任务（run）
+    - 查询任务状态（get_task_info, get_tree_stats）
+    - 支持异步并发处理（async/await）
     - 支持重试机制
+
+    内部使用 Manager 作为队列实现（不暴露给用户）
 
     Example:
         # 定义 Task
         task = Task()
 
         @task.execute
-        def crawl(data):
-            return fetch(data['url'])
+        async def crawl(data):
+            return await fetch(data['url'])
 
         @task.on_success
-        def save(data, result):
-            save_to_db(result)
+        async def save(data, result):
+            await save_to_db(result)
 
         # 创建 Worker
-        manager = Manager(redis_url="redis://localhost:6379")
         worker = Worker(
-            task=task,
-            manager=manager,
-            num_workers=5,        # 5 个并发
+            tasks=task,
+            num_workers=5,        # 5 个并发协程
             max_retries=3,        # 最多重试 3 次
             retry_delay=5,        # 重试间隔 5 秒
         )
 
-        # 启动
+        # 提交任务
+        root_id = worker.push({"url": "http://example.com"})
+
+        # 查询状态
+        stats = worker.get_tree_stats(root_id)
+
+        # 执行任务
         worker.run()
     """
 
     def __init__(
         self,
         tasks: Union[Task, Dict[str, Task]],
-        manager: Manager,
+        manager: Optional[Manager] = None,
+        db_path: str = ".flowmix/flowmix.db",
+        queue_name: str = "tasks",
         name: Optional[str] = None,
         num_workers: int = 1,
         max_retries: int = 0,
@@ -68,9 +74,11 @@ class Worker:
             tasks: Task 实例或 Task 字典 {task_name: Task}
                   - 单个 Task: 兼容旧版本
                   - 字典: 支持多个 Task，基于 task_name 路由
-            manager: Manager 实例（队列管理器）
+            manager: Manager 实例（可选，用于向后兼容）
+            db_path: SQLite 数据库文件路径（默认: .flowmix/flowmix.db）
+            queue_name: 队列名称（默认: tasks）
             name: Worker 名称（默认自动生成）
-            num_workers: 并发处理的 worker 数量（默认 1，即单线程）
+            num_workers: 并发协程数量（默认 1）
             max_retries: 失败后最大重试次数（默认 0，即不重试）
             retry_delay: 重试间隔秒数（默认 0，即立即重试）
         """
@@ -82,7 +90,12 @@ class Worker:
         else:
             self.tasks = tasks
 
-        self.manager = manager
+        # Manager 作为内部实现（支持向后兼容）
+        if manager is not None:
+            self._manager = manager
+        else:
+            self._manager = Manager(db_path=db_path, queue_name=queue_name)
+
         self.name = name or self._generate_name()
         self.num_workers = max(1, num_workers)  # 至少 1 个
         self.max_retries = max_retries
@@ -112,18 +125,90 @@ class Worker:
         """生成 Worker 名称"""
         import socket
         import os
+        import time
         hostname = socket.gethostname()
         pid = os.getpid()
         timestamp = int(time.time())
         return f"worker-{hostname}-{pid}-{timestamp}"
 
+    def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None) -> int:
+        """
+        提交任务到队列
+
+        Args:
+            data: 任务数据（字典）
+            priority: 优先级（默认 0，数字越大越优先）
+            parent_id: 父任务 ID（可选，用于构建任务树）
+
+        Returns:
+            任务 ID
+
+        Example:
+            # 提交根任务
+            root_id = worker.push({"url": "http://example.com"})
+
+            # 提交子任务
+            child_id = worker.push({"url": "http://example.com/page1"}, parent_id=root_id)
+        """
+        return self._manager.push(data, priority, parent_id)
+
+    def get_task_info(self, task_id: int) -> Optional[dict]:
+        """
+        获取任务详情
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            任务详情字典，如果不存在返回 None
+
+        Example:
+            info = worker.get_task_info(123)
+            if info:
+                print(f"状态: {info['status']}")
+        """
+        return self._manager.get_task_info(task_id)
+
+    def get_children(self, parent_id: int) -> list:
+        """
+        获取所有直接子任务
+
+        Args:
+            parent_id: 父任务 ID
+
+        Returns:
+            子任务列表
+
+        Example:
+            children = worker.get_children(100)
+            for child in children:
+                print(f"子任务 {child['id']}: {child['status']}")
+        """
+        return self._manager.get_children(parent_id)
+
+    def get_tree_stats(self, root_id: int) -> dict:
+        """
+        获取任务树的统计信息（递归查询所有子孙任务）
+
+        Args:
+            root_id: 根任务 ID
+
+        Returns:
+            统计字典，包含 total, pending, processing, completed, failed
+
+        Example:
+            stats = worker.get_tree_stats(100)
+            print(f"总任务数: {stats['total']}")
+            print(f"已完成: {stats['completed']}")
+            print(f"进度: {stats['completed'] / stats['total'] * 100:.1f}%")
+        """
+        return self._manager.get_tree_stats(root_id)
+
     def run(self):
         """
         启动 Worker（阻塞运行）
 
-        流程：
-        1. 如果 num_workers = 1，单线程处理
-        2. 如果 num_workers > 1，使用线程池并发处理
+        使用 asyncio 并发执行多个协程
         """
         self.running = True
 
@@ -131,15 +216,11 @@ class Worker:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        self.logger.info(f"Worker {self.name} started with {self.num_workers} workers")
+        self.logger.info(f"Worker {self.name} started with {self.num_workers} concurrent workers")
 
         try:
-            if self.num_workers == 1:
-                # 单线程模式
-                self._run_single_worker()
-            else:
-                # 多线程模式
-                self._run_multi_workers()
+            # 运行异步事件循环
+            asyncio.run(self._run_async_workers())
 
         except Exception as e:
             self.logger.error(f"Worker error: {e}", exc_info=True)
@@ -147,60 +228,46 @@ class Worker:
         finally:
             self._cleanup()
 
-    def _run_single_worker(self):
-        """单线程模式：顺序处理消息"""
-        consumer_name = f"{self.name}-0"
+    async def _run_async_workers(self):
+        """异步模式：并发处理消息（单个 event loop + 多个协程）"""
+        # 创建多个并发协程
+        workers = [
+            asyncio.create_task(self._worker_loop_async(f"{self.name}-{i}"))
+            for i in range(self.num_workers)
+        ]
 
-        while self.running:
-            # 从队列获取消息
-            msg = self.manager.pop(consumer_name=consumer_name)
+        # 等待所有协程完成
+        try:
+            await asyncio.gather(*workers)
+        except Exception as e:
+            self.logger.error(f"Worker error: {e}", exc_info=True)
+            # 取消所有协程
+            for worker in workers:
+                worker.cancel()
+            # 等待取消完成
+            await asyncio.gather(*workers, return_exceptions=True)
 
-            if not msg:
-                continue
-
-            # 处理消息
-            self._process_message(msg)
-
-    def _run_multi_workers(self):
-        """多线程模式：并发处理消息"""
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            # 为每个 worker 创建独立的 consumer name
-            consumer_names = [
-                f"{self.name}-{i}" for i in range(self.num_workers)
-            ]
-
-            # 提交初始任务
-            futures = {}
-            for consumer_name in consumer_names:
-                future = executor.submit(self._worker_loop, consumer_name)
-                futures[future] = consumer_name
-
-            # 等待所有 worker 完成
-            for future in as_completed(futures):
-                consumer_name = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(
-                        f"Worker {consumer_name} error: {e}",
-                        exc_info=True
-                    )
-
-    def _worker_loop(self, consumer_name: str):
-        """Worker 循环：持续从队列拉取并处理消息"""
+    async def _worker_loop_async(self, consumer_name: str):
+        """异步 Worker 循环：持续从队列拉取并处理消息"""
         self.logger.debug(f"Worker {consumer_name} started")
 
         while self.running:
             try:
-                # 从队列获取消息
-                msg = self.manager.pop(consumer_name=consumer_name)
+                # 从队列获取消息（同步调用，在线程池中执行）
+                loop = asyncio.get_event_loop()
+                msg = await loop.run_in_executor(None, self._manager.pop, consumer_name)
 
                 if not msg:
+                    # 短暂等待，避免空转
+                    await asyncio.sleep(0.1)
                     continue
 
-                # 处理消息
-                self._process_message(msg, consumer_name)
+                # 处理消息（异步）
+                await self._process_message_async(msg, consumer_name)
 
+            except asyncio.CancelledError:
+                self.logger.info(f"Worker {consumer_name} cancelled")
+                break
             except Exception as e:
                 self.logger.error(
                     f"Worker {consumer_name} processing error: {e}",
@@ -211,9 +278,9 @@ class Worker:
 
         self.logger.debug(f"Worker {consumer_name} stopped")
 
-    def _process_message(self, msg: Dict[str, Any], consumer_name: Optional[str] = None):
+    async def _process_message_async(self, msg: Dict[str, Any], consumer_name: Optional[str] = None):
         """
-        处理单个消息
+        异步处理单个消息
 
         Args:
             msg: 从 Manager.pop() 返回的消息
@@ -238,7 +305,8 @@ class Worker:
             self.logger.error(
                 f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
             )
-            self.manager.ack(msg_id)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._manager.ack, msg_id)
             return
 
         # 执行任务（带重试）
@@ -257,32 +325,42 @@ class Worker:
                     log_prefix = f"[{consumer_name}] " if consumer_name else ""
                     self.logger.info(f"{log_prefix}Processing task '{task_name}': {msg_id}")
 
-                # 执行任务（异步）
-                asyncio.run(task.run(task_data))
+                # 执行任务（异步），传入 msg_id
+                await task.run(task_data, msg_id=msg_id)
 
                 # 处理通过 task.callback() 提交的任务
                 if task._pending_callbacks:
+                    loop = asyncio.get_event_loop()
                     for callback_info in task._pending_callbacks:
                         callback_task_name = callback_info['task_name']
                         callback_data = callback_info['data']
                         callback_priority = callback_info['priority']
+                        callback_parent_id = callback_info['parent_id']
 
                         # 将 task_name 和 data 合并提交到队列
                         message = {
                             'task_name': callback_task_name,
                             **callback_data
                         }
-                        self.manager.push(message, priority=callback_priority)
+                        # 在线程池中执行同步的 push 操作
+                        await loop.run_in_executor(
+                            None,
+                            self._manager.push,
+                            message,
+                            callback_priority,
+                            callback_parent_id
+                        )
                         self.logger.debug(
-                            f"Callback task '{callback_task_name}' with priority {callback_priority}: {callback_data}"
+                            f"Callback task '{callback_task_name}' (parent_id={callback_parent_id}) with priority {callback_priority}: {callback_data}"
                         )
 
                 # 任务成功
                 self.stats["processed"] += 1
                 self.stats["success"] += 1
 
-                # 确认消息
-                self.manager.ack(msg_id)
+                # 确认消息（标记为 completed）
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._manager.ack, msg_id, False)
 
                 log_prefix = f"[{consumer_name}] " if consumer_name else ""
                 self.logger.info(f"{log_prefix}Task '{task_name}' {msg_id} completed successfully")
@@ -300,12 +378,12 @@ class Worker:
                     retry_count += 1
                     self.stats["retried"] += 1
 
-                    # 延迟
+                    # 延迟（异步）
                     if self.retry_delay > 0:
                         self.logger.info(
                             f"Retrying task '{task_name}' {msg_id} in {self.retry_delay}s..."
                         )
-                        time.sleep(self.retry_delay)
+                        await asyncio.sleep(self.retry_delay)
                 else:
                     # 达到最大重试次数
                     break
@@ -318,8 +396,9 @@ class Worker:
             f"Task '{task_name}' {msg_id} permanently failed after {self.max_retries} retries: {last_error}"
         )
 
-        # 确认消息（不再重试）
-        self.manager.ack(msg_id)
+        # 确认消息（标记为 failed）
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._manager.ack, msg_id, True, str(last_error))
 
     def _signal_handler(self, signum, _):
         """信号处理器（优雅关闭）"""

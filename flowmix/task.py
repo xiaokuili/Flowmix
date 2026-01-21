@@ -77,6 +77,8 @@ class Task:
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
         # 存储待回调的任务（每次执行前清空）
         self._pending_callbacks: list[dict] = []
+        # 当前执行的消息 ID（用于自动关联 parent_id）
+        self._current_msg_id: Optional[int] = None
 
     def execute(self, func: Callable[[dict], Any]) -> Callable:
         """
@@ -166,6 +168,7 @@ class Task:
 
         在 execute() 函数中调用此方法，将回调信息记录下来。
         Worker 会在任务执行完成后自动将这些任务提交到队列。
+        自动关联 parent_id 为当前任务的 msg_id。
 
         Args:
             task_name: 要回调的任务名称（Worker 会根据此名称路由到对应的 Task）
@@ -180,7 +183,7 @@ class Task:
                 html = fetch(data['url'])
                 links = parse_links(html)
 
-                # 回调自己或其他任务
+                # 回调自己或其他任务（自动关联为子任务）
                 for link in links:
                     task.callback('crawl', {'url': link}, priority=10)
 
@@ -189,21 +192,24 @@ class Task:
         self._pending_callbacks.append({
             'task_name': task_name,
             'data': data,
-            'priority': priority
+            'priority': priority,
+            'parent_id': self._current_msg_id  # 自动关联父任务
         })
 
-    async def run(self, data: dict) -> Any:
+    async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """
         执行任务（内部使用，由 Worker 调用）
 
         执行流程：
-        1. 清空待提交任务列表
-        2. 调用 execute(data) - 支持同步和异步
-        3. 成功 -> 调用 on_success(data, result) - 支持同步和异步
-        4. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常 - 支持同步和异步
+        1. 记录当前消息 ID（用于 callback 自动关联 parent_id）
+        2. 清空待提交任务列表
+        3. 调用 execute(data) - 支持同步和异步
+        4. 成功 -> 调用 on_success(data, result) - 支持同步和异步
+        5. 失败 -> 调用 on_failure(data, error)，然后重新抛出异常 - 支持同步和异步
 
         Args:
             data: 输入数据
+            msg_id: 当前消息 ID（由 Worker 传入，用于构建任务树）
 
         Returns:
             执行结果
@@ -214,6 +220,9 @@ class Task:
         """
         if self._execute_func is None:
             raise RuntimeError("Task.execute() is not defined. Use @task.execute to register execute function.")
+
+        # 记录当前消息 ID
+        self._current_msg_id = msg_id
 
         # 清空待回调任务列表
         self._pending_callbacks.clear()
