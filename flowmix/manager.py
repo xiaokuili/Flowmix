@@ -7,6 +7,7 @@ Manager - 消息队列管理器
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -32,7 +33,7 @@ class Manager:
 
     Example:
         manager = Manager(
-            db_path="flowmix.db",
+            db_path=".flowmix/flowmix.db",
             queue_name="my-queue"
         )
 
@@ -52,7 +53,7 @@ class Manager:
 
     def __init__(
         self,
-        db_path: str = "flowmix.db",
+        db_path: str = ".flowmix/flowmix.db",
         queue_name: str = "tasks",
         timeout: float = 5.0,
     ):
@@ -60,10 +61,15 @@ class Manager:
         初始化 Manager
 
         Args:
-            db_path: SQLite 数据库文件路径
+            db_path: SQLite 数据库文件路径（默认: .flowmix/flowmix.db）
             queue_name: 队列名称（表名）
             timeout: pop() 等待超时时间（秒）
         """
+        # 确保数据库目录存在
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
         self.db_path = db_path
         self.queue_name = queue_name
         self.timeout = timeout

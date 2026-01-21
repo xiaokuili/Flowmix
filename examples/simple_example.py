@@ -51,7 +51,7 @@ def publish():
     """发布任务到队列"""
     print("\n📤 Publishing tasks...")
 
-    manager = Manager(db_path="flowmix.db")
+    manager = Manager()  # 使用默认路径 .flowmix/flowmix.db
 
     # 发布 3 个任务
     urls = [
@@ -76,7 +76,7 @@ def start_worker():
     """启动 Worker 消费任务"""
     print("\n🚀 Starting worker...\n")
 
-    manager = Manager(db_path="flowmix.db")
+    manager = Manager()  # 使用默认路径 .flowmix/flowmix.db
 
     worker = Worker(
         tasks=task,
