@@ -69,15 +69,9 @@ def crawl(data):
 
     return {"url": url}
 
-# 提交根任务
-worker = Worker(tasks=crawl_task)
-root_id = worker.push({'url': 'http://example.com', 'depth': 0})
-
-# 查询进度
-stats = worker.get_tree_stats(root_id)
-print(f"进度: {stats['completed']}/{stats['total']}")
-
-# 执行
+# 提交根任务并执行
+worker = Worker(tasks=crawl_task, num_workers=5)
+worker.push({'url': 'http://example.com', 'depth': 0}, task_name='crawl')
 worker.run()
 ```
 
@@ -223,7 +217,9 @@ def crawl(data):
     return result
 
 # 3. 查询状态
-stats = worker.get_tree_stats(root_id)
+from flowmix import StatsReader
+reader = StatsReader()
+stats = reader.get_worker_stats()
 
 # 4. 配置重试
 worker = Worker(tasks=task, num_workers=5, max_retries=3, retry_delay=5)
