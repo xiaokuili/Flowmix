@@ -18,8 +18,8 @@ pip install git+https://github.com/xiaokuili/Flowmix.git
 # 安装指定版本标签
 pip install git+https://github.com/xiaokuili/Flowmix.git@v0.3.0
 
-# 安装指定分支
-pip install git+https://github.com/xiaokuili/Flowmix.git@main
+# 强制安装
+pip install --force-reinstall git+https://github.com/xiaokuili/Flowmix.git@v0.5.0
 ```
 
 ---
