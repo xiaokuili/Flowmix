@@ -203,7 +203,7 @@ class Manager:
                 conn.execute("BEGIN IMMEDIATE")
 
                 cursor = conn.execute(f"""
-                    SELECT id, data FROM {self.queue_name}
+                    SELECT id, data, task_name FROM {self.queue_name}
                     WHERE status = 'pending'
                     ORDER BY priority DESC, id ASC
                     LIMIT 1
@@ -212,7 +212,7 @@ class Manager:
                 row = cursor.fetchone()
 
                 if row:
-                    msg_id, data_json = row['id'], row['data']
+                    msg_id, data_json, task_name = row['id'], row['data'], row['task_name']
 
                     # 标记为处理中
                     conn.execute(f"""
@@ -227,9 +227,9 @@ class Manager:
 
                     # 解析数据
                     data = json.loads(data_json)
-                    result = {"id": msg_id, **data}
+                    result = {"id": msg_id, "task_name": task_name, **data}
 
-                    self.logger.debug(f"Popped message {msg_id} from queue")
+                    self.logger.debug(f"Popped message {msg_id} from queue (task_name={task_name})")
                     return result
 
                 else:
