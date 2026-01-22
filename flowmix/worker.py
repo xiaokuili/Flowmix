@@ -255,7 +255,13 @@ class Worker:
         msg_id = msg["id"]
 
         # 提取任务名称和数据
-        task_name = msg.get("task_name", "default")
+        task_name = msg.get("task_name")
+        # 如果未指定 task_name，使用默认任务名（当只有单个 Task 时）
+        if task_name is None and len(self.tasks) == 1:
+            task_name = list(self.tasks.keys())[0]
+        elif task_name is None:
+            task_name = "default"
+
         if "data" in msg:
             task_data = msg["data"]
         else:
