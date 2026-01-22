@@ -260,7 +260,20 @@ class Worker:
         if task_name is None and len(self.tasks) == 1:
             task_name = list(self.tasks.keys())[0]
         elif task_name is None:
-            task_name = "default"
+            # 多个任务时必须指定 task_name
+            self.logger.error(
+                f"Message {msg_id} has no task_name. When multiple tasks are registered, "
+                f"task_name must be specified. Available tasks: {list(self.tasks.keys())}"
+            )
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self._manager.ack,
+                msg_id,
+                True,  # failed
+                "Missing task_name field"
+            )
+            return
 
         if "data" in msg:
             task_data = msg["data"]
