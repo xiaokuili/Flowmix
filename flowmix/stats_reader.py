@@ -626,6 +626,197 @@ class StatsReader:
 
         return result
 
+    def get_task_info(self, task_id: int) -> Optional[dict]:
+        """
+        获取任务详情
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            任务详情字典，如果不存在返回 None
+
+        Example:
+            info = reader.get_task_info(123)
+            if info:
+                print(f"状态: {info['status']}")
+                print(f"数据: {info['data']}")
+        """
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE id = ?",
+            (task_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+    def get_children(self, parent_id: int) -> list:
+        """
+        获取所有直接子任务
+
+        Args:
+            parent_id: 父任务 ID
+
+        Returns:
+            子任务列表
+
+        Example:
+            children = reader.get_children(100)
+            for child in children:
+                print(f"子任务 {child['id']}: {child['status']}")
+        """
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE parent_id = ? ORDER BY id ASC",
+            (parent_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_tree_stats(self, root_id: int, group_by_task: bool = False) -> dict:
+        """
+        获取任务树的统计信息（递归查询所有子孙任务）
+
+        Args:
+            root_id: 根任务 ID
+            group_by_task: 是否按任务名称分组统计（默认 False）
+
+        Returns:
+            统计字典，包含 total, pending, processing, completed, failed
+            如果 group_by_task=True，额外包含 by_task 字段
+
+        Example:
+            # 基本统计
+            stats = reader.get_tree_stats(100)
+            print(f"总任务数: {stats['total']}")
+            print(f"已完成: {stats['completed']}")
+            print(f"进度: {stats['completed'] / stats['total'] * 100:.1f}%")
+
+            # 按任务名称分组统计
+            stats = reader.get_tree_stats(100, group_by_task=True)
+            for task_name, task_stats in stats['by_task'].items():
+                print(f"{task_name}: {task_stats['completed']}/{task_stats['total']}")
+        """
+        conn = self._get_connection()
+
+        # 使用 CTE 递归查询整棵树
+        cursor = conn.execute(f"""
+            WITH RECURSIVE tree AS (
+                SELECT * FROM {self.queue_name} WHERE id = ?
+                UNION ALL
+                SELECT t.* FROM {self.queue_name} t
+                INNER JOIN tree ON t.parent_id = tree.id
+            )
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+            FROM tree
+        """, (root_id,))
+
+        row = cursor.fetchone()
+        result = {
+            "total": row["total"] or 0,
+            "pending": row["pending"] or 0,
+            "processing": row["processing"] or 0,
+            "completed": row["completed"] or 0,
+            "failed": row["failed"] or 0,
+        }
+
+        # 如果需要按任务名称分组
+        if group_by_task:
+            cursor = conn.execute(f"""
+                WITH RECURSIVE tree AS (
+                    SELECT * FROM {self.queue_name} WHERE id = ?
+                    UNION ALL
+                    SELECT t.* FROM {self.queue_name} t
+                    INNER JOIN tree ON t.parent_id = tree.id
+                )
+                SELECT task_name, status, COUNT(*) as count
+                FROM tree
+                GROUP BY task_name, status
+            """, (root_id,))
+
+            by_task = {}
+            for row in cursor.fetchall():
+                task_name = row['task_name'] or 'unknown'
+                status = row['status']
+                count = row['count']
+
+                if task_name not in by_task:
+                    by_task[task_name] = {
+                        'total': 0,
+                        'pending': 0,
+                        'processing': 0,
+                        'completed': 0,
+                        'failed': 0
+                    }
+
+                by_task[task_name]['total'] += count
+                by_task[task_name][status] += count
+
+            result['by_task'] = by_task
+
+        return result
+
+    def get_tree_details(self, root_id: int) -> list:
+        """
+        获取任务树的详细信息（递归查询所有子孙任务）
+
+        Args:
+            root_id: 根任务 ID
+
+        Returns:
+            任务列表（按 ID 顺序），每个任务包含完整信息：
+            - id: 任务 ID
+            - parent_id: 父任务 ID
+            - task_name: 任务名称
+            - data: 任务参数（已解析为 dict）
+            - status: 任务状态
+            - result: 执行结果（已解析为 dict，如果有）
+            - error: 错误信息（如果失败）
+            - created_at, updated_at, completed_at: 时间戳
+
+        Example:
+            # 获取任务树的所有任务
+            details = reader.get_tree_details(100)
+            for task in details:
+                print(f"[{task['id']}] {task['task_name']}: {task['status']}")
+                print(f"  Data: {task['data']}")
+                if task['result']:
+                    print(f"  Result: {task['result']}")
+        """
+        import json
+        conn = self._get_connection()
+
+        # 使用 CTE 递归查询整棵树
+        cursor = conn.execute(f"""
+            WITH RECURSIVE tree AS (
+                SELECT * FROM {self.queue_name} WHERE id = ?
+                UNION ALL
+                SELECT t.* FROM {self.queue_name} t
+                INNER JOIN tree ON t.parent_id = tree.id
+            )
+            SELECT * FROM tree ORDER BY id ASC
+        """, (root_id,))
+
+        rows = cursor.fetchall()
+
+        # 返回任务列表
+        tasks = []
+        for row in rows:
+            task = dict(row)
+            # 解析 JSON 字段
+            if task.get('data'):
+                task['data'] = json.loads(task['data'])
+            if task.get('result'):
+                task['result'] = json.loads(task['result'])
+            tasks.append(task)
+        return tasks
+
     def _format_datetime(self, julian_day: Optional[float]) -> Optional[str]:
         """将 Julian Day 转换为 ISO 格式字符串"""
         if julian_day is None:

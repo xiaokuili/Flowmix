@@ -97,6 +97,10 @@ class Worker:
         else:
             self._manager = Manager(db_path=db_path, queue_name=queue_name)
 
+        # 设置 Task 的数据库配置（用于缓存功能）
+        for task in self.tasks.values():
+            task.set_db_config(db_path, queue_name)
+
         self.name = name or self._generate_name()
         self.num_workers = max(1, num_workers)  # 至少 1 个
         self.max_retries = max_retries
@@ -160,110 +164,6 @@ class Worker:
             task_name = list(self.tasks.keys())[0]
 
         return self._manager.push(data, priority, parent_id, task_name)
-
-    def get_task_info(self, task_id: int) -> Optional[dict]:
-        """
-        获取任务详情
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            任务详情字典，如果不存在返回 None
-
-        Example:
-            info = worker.get_task_info(123)
-            if info:
-                print(f"状态: {info['status']}")
-        """
-        return self._manager.get_task_info(task_id)
-
-    def get_children(self, parent_id: int) -> list:
-        """
-        获取所有直接子任务
-
-        Args:
-            parent_id: 父任务 ID
-
-        Returns:
-            子任务列表
-
-        Example:
-            children = worker.get_children(100)
-            for child in children:
-                print(f"子任务 {child['id']}: {child['status']}")
-        """
-        return self._manager.get_children(parent_id)
-
-    def get_tree_stats(self, root_id: int, group_by_task: bool = False) -> dict:
-        """
-        获取任务树的统计信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-            group_by_task: 是否按任务名称分组统计（默认 False）
-
-        Returns:
-            统计字典，包含 total, pending, processing, completed, failed
-            如果 group_by_task=True，额外包含 by_task 字段
-
-        Example:
-            # 基本统计
-            stats = worker.get_tree_stats(100)
-            print(f"总任务数: {stats['total']}")
-            print(f"已完成: {stats['completed']}")
-            print(f"进度: {stats['completed'] / stats['total'] * 100:.1f}%")
-
-            # 按任务名称分组统计
-            stats = worker.get_tree_stats(100, group_by_task=True)
-            for task_name, task_stats in stats['by_task'].items():
-                print(f"{task_name}: {task_stats['completed']}/{task_stats['total']}")
-        """
-        return self._manager.get_tree_stats(root_id, group_by_task)
-
-    def get_tree_details(self, root_id: int) -> list:
-        """
-        获取任务树的详细信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-
-        Returns:
-            任务列表（按 ID 顺序），每个任务包含完整信息：
-            - id: 任务 ID
-            - parent_id: 父任务 ID（展示父子关系）
-            - task_name: 任务名称
-            - data: 任务参数
-            - status: 任务状态
-            - result: 执行结果
-            - error: 错误信息（如果失败）
-
-        Example:
-            # 获取任务树的所有任务
-            details = worker.get_tree_details(root_id)
-            for task in details:
-                indent = '  ' if task['parent_id'] else ''
-                print(f"{indent}[{task['id']}] {task['task_name']}: {task['status']}")
-                print(f"{indent}  Parent: {task['parent_id']}")
-                print(f"{indent}  Data: {task['data']}")
-                if task['result']:
-                    print(f"{indent}  Result: {task['result']}")
-
-            # 输出示例：
-            # [1] crawl: completed
-            #   Parent: None
-            #   Data: {'url': 'http://example.com', 'depth': 0}
-            #   Result: {'status': 'ok', 'links': 3}
-            #   [2] crawl: completed
-            #     Parent: 1
-            #     Data: {'url': 'http://example.com/page1', 'depth': 1}
-            #     Result: {'status': 'ok', 'links': 0}
-            #   [3] crawl: completed
-            #     Parent: 1
-            #     Data: {'url': 'http://example.com/page2', 'depth': 1}
-            #     Result: {'status': 'ok', 'links': 2}
-        """
-        return self._manager.get_tree_details(root_id)
 
     def run(self):
         """
@@ -370,6 +270,44 @@ class Worker:
             await loop.run_in_executor(None, self._manager.ack, msg_id)
             return
 
+        # ========== 缓存检查（Task 层功能） ==========
+        cached_result = None
+        fingerprint = None
+
+        if task.dedup:
+            # Task 检查缓存
+            loop = asyncio.get_event_loop()
+            cached_result = await loop.run_in_executor(
+                None,
+                task.check_cache,
+                task_data
+            )
+
+            if cached_result is not None:
+                # 命中缓存，直接返回结果
+                fingerprint_preview = task.get_fingerprint(task_data)[:8] if task.get_fingerprint(task_data) else "unknown"
+                log_prefix = f"[{consumer_name}] " if consumer_name else ""
+                self.logger.info(
+                    f"{log_prefix}Task '{task_name}' {msg_id} "
+                    f"hit cache (fingerprint={fingerprint_preview}...), skipping execution"
+                )
+
+                self.stats["processed"] += 1
+                self.stats["success"] += 1
+
+                # 标记为 completed，使用缓存的结果
+                await loop.run_in_executor(
+                    None,
+                    self._manager.ack,
+                    msg_id,
+                    False,  # 未失败
+                    None,   # 无错误
+                    cached_result,  # 缓存的结果
+                    None    # 不需要保存 fingerprint（已存在）
+                )
+
+                return
+
         # 执行任务（带重试）
         retry_count = 0
         last_error = None
@@ -424,9 +362,20 @@ class Worker:
                 self.stats["processed"] += 1
                 self.stats["success"] += 1
 
-                # 确认消息（标记为 completed），保存执行结果
+                # 获取任务指纹（由 Task 生成）
+                fingerprint = task.get_fingerprint(task_data)
+
+                # 确认消息（标记为 completed），保存执行结果和指纹
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._manager.ack, msg_id, False, None, result)
+                await loop.run_in_executor(
+                    None,
+                    self._manager.ack,
+                    msg_id,
+                    False,  # 未失败
+                    None,   # 无错误
+                    result,  # 执行结果
+                    fingerprint  # 任务指纹（用于去重，如果 task.dedup=False 则为 None）
+                )
 
                 log_prefix = f"[{consumer_name}] " if consumer_name else ""
                 self.logger.info(f"{log_prefix}Task '{task_name}' {msg_id} completed successfully")

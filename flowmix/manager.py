@@ -110,11 +110,20 @@ class Manager:
                 consumer TEXT,
                 error TEXT,
                 result TEXT,
+                fingerprint TEXT,
                 created_at REAL DEFAULT (julianday('now')),
                 updated_at REAL DEFAULT (julianday('now')),
                 completed_at REAL
             )
         """)
+
+        # 迁移：为已存在的表添加 fingerprint 字段（如果不存在）
+        cursor = conn.execute(f"PRAGMA table_info({self.queue_name})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'fingerprint' not in columns:
+            self.logger.info(f"Adding fingerprint column to {self.queue_name} table")
+            conn.execute(f"ALTER TABLE {self.queue_name} ADD COLUMN fingerprint TEXT")
+
         # 创建索引加速查询（优先级降序，ID 升序）
         conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_status
@@ -124,6 +133,11 @@ class Manager:
         conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_parent
             ON {self.queue_name}(parent_id)
+        """)
+        # 创建索引加速 fingerprint 查询（用于去重）
+        conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_fingerprint
+            ON {self.queue_name}(fingerprint, status, completed_at DESC)
         """)
         conn.commit()
 
@@ -240,7 +254,7 @@ class Manager:
                     self.logger.error(f"Database error: {e}")
                     return None
 
-    def ack(self, message_id: int, failed: bool = False, error: str = None, result: Any = None):
+    def ack(self, message_id: int, failed: bool = False, error: str = None, result: Any = None, fingerprint: Optional[str] = None):
         """
         确认消息已处理（标记为 completed/failed，不再删除以保留任务树结构）
 
@@ -249,26 +263,38 @@ class Manager:
             failed: 是否失败（默认 False）
             error: 失败原因（可选，仅在 failed=True 时有效）
             result: 执行结果（可选，成功时保存）
+            fingerprint: 任务指纹（可选，用于去重缓存，只在成功时保存）
 
         Example:
             msg = manager.pop("worker-1")
             # ... 处理消息 ...
 
             # 成功
-            manager.ack(msg["id"], result={"status": "ok"})
+            manager.ack(msg["id"], result={"status": "ok"}, fingerprint="abc123...")
 
-            # 失败
+            # 失败（不保存 fingerprint）
             manager.ack(msg["id"], failed=True, error="Connection timeout")
         """
         conn = self._get_connection()
         status = 'failed' if failed else 'completed'
         result_json = json.dumps(result) if result is not None else None
-        conn.execute(
-            f"""UPDATE {self.queue_name}
-                SET status = ?, error = ?, result = ?, completed_at = julianday('now'), updated_at = julianday('now')
-                WHERE id = ?""",
-            (status, error, result_json, message_id)
-        )
+
+        # 只在成功时保存 fingerprint
+        if not failed and fingerprint:
+            conn.execute(
+                f"""UPDATE {self.queue_name}
+                    SET status = ?, error = ?, result = ?, fingerprint = ?, completed_at = julianday('now'), updated_at = julianday('now')
+                    WHERE id = ?""",
+                (status, error, result_json, fingerprint, message_id)
+            )
+        else:
+            conn.execute(
+                f"""UPDATE {self.queue_name}
+                    SET status = ?, error = ?, result = ?, completed_at = julianday('now'), updated_at = julianday('now')
+                    WHERE id = ?""",
+                (status, error, result_json, message_id)
+            )
+
         conn.commit()
         self.logger.debug(f"ACKed message {message_id} as {status}")
 
@@ -306,226 +332,6 @@ class Manager:
         conn.execute(f"DELETE FROM {self.queue_name}")
         conn.commit()
         self.logger.warning("Cleared all messages from queue")
-
-    def get_task_info(self, task_id: int) -> Optional[dict]:
-        """
-        获取任务详情
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            任务详情字典，如果不存在返回 None
-
-        Example:
-            info = manager.get_task_info(123)
-            print(info)
-            # {
-            #     'id': 123,
-            #     'parent_id': 100,
-            #     'data': '{"url": "..."}',
-            #     'status': 'completed',
-            #     'error': None,
-            #     ...
-            # }
-        """
-        conn = self._get_connection()
-        cursor = conn.execute(
-            f"SELECT * FROM {self.queue_name} WHERE id = ?",
-            (task_id,)
-        )
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-
-    def get_children(self, parent_id: int) -> list:
-        """
-        获取所有直接子任务
-
-        Args:
-            parent_id: 父任务 ID
-
-        Returns:
-            子任务列表
-
-        Example:
-            children = manager.get_children(100)
-            for child in children:
-                print(f"子任务 {child['id']}: {child['status']}")
-        """
-        conn = self._get_connection()
-        cursor = conn.execute(
-            f"SELECT * FROM {self.queue_name} WHERE parent_id = ? ORDER BY id ASC",
-            (parent_id,)
-        )
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_tree_stats(self, root_id: int, group_by_task: bool = False) -> dict:
-        """
-        获取任务树的统计信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-            group_by_task: 是否按任务名称分组统计（默认 False）
-
-        Returns:
-            统计字典，包含 total, pending, processing, completed, failed
-            如果 group_by_task=True，额外包含 by_task 字段
-
-        Example:
-            # 基本统计
-            stats = manager.get_tree_stats(100)
-            print(stats)
-            # {
-            #     'total': 150,
-            #     'pending': 10,
-            #     'processing': 5,
-            #     'completed': 130,
-            #     'failed': 5
-            # }
-
-            # 按任务名称分组统计
-            stats = manager.get_tree_stats(100, group_by_task=True)
-            print(stats)
-            # {
-            #     'total': 150,
-            #     'pending': 10,
-            #     'processing': 5,
-            #     'completed': 130,
-            #     'failed': 5,
-            #     'by_task': {
-            #         'crawl': {'total': 100, 'pending': 5, 'completed': 90, 'failed': 5},
-            #         'parse': {'total': 50, 'pending': 5, 'completed': 40, 'failed': 5}
-            #     }
-            # }
-        """
-        conn = self._get_connection()
-
-        # 使用 CTE 递归查询整棵树
-        cursor = conn.execute(f"""
-            WITH RECURSIVE tree AS (
-                SELECT * FROM {self.queue_name} WHERE id = ?
-                UNION ALL
-                SELECT t.* FROM {self.queue_name} t
-                INNER JOIN tree ON t.parent_id = tree.id
-            )
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
-            FROM tree
-        """, (root_id,))
-
-        row = cursor.fetchone()
-        result = {
-            "total": row["total"] or 0,
-            "pending": row["pending"] or 0,
-            "processing": row["processing"] or 0,
-            "completed": row["completed"] or 0,
-            "failed": row["failed"] or 0,
-        }
-
-        # 如果需要按任务名称分组
-        if group_by_task:
-            cursor = conn.execute(f"""
-                WITH RECURSIVE tree AS (
-                    SELECT * FROM {self.queue_name} WHERE id = ?
-                    UNION ALL
-                    SELECT t.* FROM {self.queue_name} t
-                    INNER JOIN tree ON t.parent_id = tree.id
-                )
-                SELECT task_name, status, COUNT(*) as count
-                FROM tree
-                GROUP BY task_name, status
-            """, (root_id,))
-
-            by_task = {}
-            for row in cursor.fetchall():
-                task_name = row['task_name'] or 'unknown'
-                status = row['status']
-                count = row['count']
-
-                if task_name not in by_task:
-                    by_task[task_name] = {
-                        'total': 0,
-                        'pending': 0,
-                        'processing': 0,
-                        'completed': 0,
-                        'failed': 0
-                    }
-
-                by_task[task_name]['total'] += count
-                by_task[task_name][status] += count
-
-            result['by_task'] = by_task
-
-        return result
-
-    def get_tree_details(self, root_id: int) -> list:
-        """
-        获取任务树的详细信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-
-        Returns:
-            任务列表（按 ID 顺序），每个任务包含完整信息：
-            - id: 任务 ID
-            - parent_id: 父任务 ID
-            - task_name: 任务名称
-            - data: 任务参数（已解析为 dict）
-            - status: 任务状态
-            - result: 执行结果（已解析为 dict，如果有）
-            - error: 错误信息（如果失败）
-            - created_at, updated_at, completed_at: 时间戳
-
-        Example:
-            # 获取任务树的所有任务
-            details = manager.get_tree_details(100)
-            for task in details:
-                print(f"[{task['id']}] {task['task_name']}: {task['status']}")
-                print(f"  Data: {task['data']}")
-                if task['result']:
-                    print(f"  Result: {task['result']}")
-            # [100] crawl: completed
-            #   Data: {'url': 'http://example.com', 'depth': 0}
-            #   Result: {'status': 'ok', 'links': 3}
-            # [101] crawl: completed
-            #   Data: {'url': 'http://example.com/page1', 'depth': 1}
-            #   Result: {'status': 'ok', 'links': 0}
-            # [102] parse: completed
-            #   Data: {'html': '<html>...'}
-            #   Result: {'title': 'Example', 'links': [...]}
-        """
-        conn = self._get_connection()
-
-        # 使用 CTE 递归查询整棵树
-        cursor = conn.execute(f"""
-            WITH RECURSIVE tree AS (
-                SELECT * FROM {self.queue_name} WHERE id = ?
-                UNION ALL
-                SELECT t.* FROM {self.queue_name} t
-                INNER JOIN tree ON t.parent_id = tree.id
-            )
-            SELECT * FROM tree ORDER BY id ASC
-        """, (root_id,))
-
-        rows = cursor.fetchall()
-
-        # 返回任务列表
-        tasks = []
-        for row in rows:
-            task = dict(row)
-            # 解析 JSON 字段
-            if task.get('data'):
-                task['data'] = json.loads(task['data'])
-            if task.get('result'):
-                task['result'] = json.loads(task['result'])
-            tasks.append(task)
-        return tasks
 
     def close(self):
         """关闭数据库连接"""

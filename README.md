@@ -174,7 +174,56 @@ for task in processing:
 ```
 
 
-### 3. 并发限流控制
+### 3. 任务去重/缓存
+
+通过 `dedup` 参数自动识别并复用相同任务的执行结果，避免重复计算：
+
+```python
+# 场景 1：爬虫 URL 去重（永久缓存）
+crawl_task = Task(name='crawl', dedup=True)
+
+@crawl_task.execute
+def crawl(data):
+    url = data['url']
+    print(f"实际爬取: {url}")
+    html = fetch(url)
+
+    # 即使提交重复 URL，框架会自动复用结果
+    for link in parse_links(html):
+        crawl_task.callback('crawl', {'url': link})
+
+    return {"url": url, "html": html}
+
+worker = Worker(tasks=crawl_task, num_workers=5)
+worker.push({'url': 'http://example.com'}, task_name='crawl')
+worker.push({'url': 'http://example.com'}, task_name='crawl')  # 命中缓存，不会重复爬取
+worker.run()
+
+# 场景 2：API 调用缓存（带过期时间）
+api_task = Task(name='fetch_user', dedup=True, dedup_ttl=3600)  # 1小时内复用
+
+@api_task.execute
+def fetch_user(data):
+    return api_get(f"/users/{data['user_id']}")
+
+worker = Worker(tasks=api_task)
+worker.push({'user_id': 123}, task_name='fetch_user')
+# 1 小时内再次调用，直接返回缓存结果
+worker.push({'user_id': 123}, task_name='fetch_user')
+```
+
+**工作原理**：
+- **指纹生成**：根据任务名 + 参数生成 SHA256 哈希
+- **缓存命中**：查找相同指纹的已完成任务，直接返回结果
+- **只缓存成功**：失败的任务不缓存，可以重新执行
+- **TTL 支持**：`dedup_ttl=None` 永久缓存，`dedup_ttl=3600` 缓存 1 小时
+
+**适用场景**：
+- 爬虫 URL 去重（避免重复爬取相同页面）
+- API 调用结果缓存（减少外部 API 请求）
+- 计算结果缓存（避免重复计算）
+
+### 4. 并发限流控制
 
 通过 `concurrency_limit` 参数控制任务的每秒最大并发数，避免过载：
 
@@ -202,7 +251,7 @@ worker.run()
 - 数据库操作保护（控制并发连接数）
 - 爬虫礼貌性限制（避免对目标服务器造成压力）
 
-### 4. 简洁的接口设计
+### 5. 简洁的接口设计
 
 统一的 API 设计，让开发更直观：
 
