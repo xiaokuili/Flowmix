@@ -59,7 +59,7 @@ def crawl(data):
     url = data['url']
     depth = data.get('depth', 0)
 
-    # 爬取子页面（自动构建父子关系）
+    # 爬取子页面（立即提交到队列，自动构建父子关系）
     if depth < 2:
         for i in range(1, 4):
             crawl_task.callback('crawl', {
@@ -259,11 +259,20 @@ worker.run()
 # 1. 提交任务
 root_id = worker.push({"url": "http://example.com"})
 
-# 2. 动态回调（在任务执行中自动构建任务树）
+# 2. 动态回调（可在任何地方使用，立即提交到队列）
 @task.execute
 def crawl(data):
+    # 在 execute 中使用（自动关联父子关系）
     task.callback('crawl', {'url': link}, priority=10)
     return result
+
+@task.on_success
+def on_success(data, result):
+    # 在 on_success 中使用（任务成功后才会调用）
+    task.callback('analyze', {'html': result})
+
+# 外部使用
+task.callback('crawl', {'url': 'http://example.com'})
 
 # 3. 查询状态
 from flowmix import StatsReader

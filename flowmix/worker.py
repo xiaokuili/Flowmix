@@ -7,7 +7,7 @@ Worker - 任务执行器
 import asyncio
 import logging
 import signal
-from typing import Optional, Dict, Any, Union, List
+from typing import Optional, Dict, Any, Union
 
 from .manager import Manager
 from .task import Task
@@ -100,6 +100,8 @@ class Worker:
         # 设置 Task 的数据库配置（用于缓存功能）
         for task in self.tasks.values():
             task.set_db_config(db_path, queue_name)
+            # 设置 Worker 引用（用于 callback 立即提交任务）
+            task._worker = self
 
         self.name = name or self._generate_name()
         self.num_workers = max(1, num_workers)  # 至少 1 个
@@ -336,29 +338,7 @@ class Worker:
                     if task.concurrency_limit:
                         self._limiter.release(task_name)
 
-                # 处理通过 task.callback() 提交的任务
-                if task._pending_callbacks:
-                    loop = asyncio.get_event_loop()
-                    for callback_info in task._pending_callbacks:
-                        callback_task_name = callback_info['task_name']
-                        callback_data = callback_info['data']
-                        callback_priority = callback_info['priority']
-                        callback_parent_id = callback_info['parent_id']
-
-                        # 在线程池中执行同步的 push 操作，传入 task_name
-                        await loop.run_in_executor(
-                            None,
-                            self._manager.push,
-                            callback_data,
-                            callback_priority,
-                            callback_parent_id,
-                            callback_task_name
-                        )
-                        self.logger.debug(
-                            f"Callback task '{callback_task_name}' (parent_id={callback_parent_id}) with priority {callback_priority}: {callback_data}"
-                        )
-
-                # 任务成功
+                # 任务成功（callback 已在 task.run() 中立即提交）
                 self.stats["processed"] += 1
                 self.stats["success"] += 1
 

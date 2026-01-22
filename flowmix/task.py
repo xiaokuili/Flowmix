@@ -4,7 +4,6 @@ Task - 任务定义
 通过装饰器注册执行函数和钩子函数
 """
 
-import asyncio
 import hashlib
 import inspect
 import json
@@ -48,7 +47,7 @@ class Task:
         worker.run()
 
     动态回调任务（callback）:
-        # 在执行函数中调用 task.callback() 回调其他任务
+        # callback() 可在任何地方使用，立即提交任务到队列
         crawl_task = Task(name='crawl')
 
         @crawl_task.execute
@@ -56,11 +55,16 @@ class Task:
             html = fetch(data['url'])
             links = parse_links(html)
 
-            # 回调任务（可以是自己或其他任务）
+            # 立即提交子任务（自动关联父子关系）
             for link in links:
                 crawl_task.callback('crawl', {'url': link}, priority=10)  # DFS
 
             return html
+
+        @crawl_task.on_success
+        def on_success(data, result):
+            # 也可以在 on_success 中使用
+            crawl_task.callback('analyze', {'html': result})
 
         # 优先级说明：
         # - priority 越大越优先执行
@@ -105,8 +109,8 @@ class Task:
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
-        # 存储待回调的任务（每次执行前清空）
-        self._pending_callbacks: list[dict] = []
+        # Worker 引用（由 Worker 设置，用于 callback 立即提交任务）
+        self._worker: Optional[Any] = None
         # 当前执行的消息 ID（用于自动关联 parent_id）
         self._current_msg_id: Optional[int] = None
         # 数据库配置（由 Worker 设置）
@@ -199,11 +203,11 @@ class Task:
 
     def callback(self, task_name: str, data: dict, priority: int = 0):
         """
-        回调其他任务（由 Worker 负责实际提交到队列）
+        立即提交任务到队列（可在任何地方使用）
 
-        在 execute() 函数中调用此方法，将回调信息记录下来。
-        Worker 会在任务执行完成后自动将这些任务提交到队列。
-        自动关联 parent_id 为当前任务的 msg_id。
+        在 execute()、on_success()、on_failure() 或外部任意位置调用此方法，
+        任务会立即提交到队列。如果在 execute() 执行期间调用，会自动关联
+        parent_id 为当前任务的 msg_id。
 
         Args:
             task_name: 要回调的任务名称（Worker 会根据此名称路由到对应的 Task）
@@ -212,24 +216,39 @@ class Task:
                      - 高优先级 -> 深度优先（DFS）
                      - 低优先级 -> 广度优先（BFS）
 
+        Raises:
+            RuntimeError: 如果 Task 未关联到 Worker
+
         Example:
+            # 在 execute 中使用（自动关联父任务）
             @task.execute
             def crawl(data):
                 html = fetch(data['url'])
                 links = parse_links(html)
 
-                # 回调自己或其他任务（自动关联为子任务）
+                # 立即提交子任务
                 for link in links:
                     task.callback('crawl', {'url': link}, priority=10)
 
                 return html
+
+            # 在 on_success 中使用
+            @task.on_success
+            def on_success(data, result):
+                task.callback('analyze', {'html': result})
+
+            # 在外部使用
+            task.callback('crawl', {'url': 'http://example.com'})
         """
-        self._pending_callbacks.append({
-            'task_name': task_name,
-            'data': data,
-            'priority': priority,
-            'parent_id': self._current_msg_id  # 自动关联父任务
-        })
+        if not self._worker:
+            raise RuntimeError(
+                f"Task '{self.name}' is not attached to a Worker. "
+                "Please create a Worker instance with this task first."
+            )
+
+        # 立即提交到队列（如果在 execute 中，自动关联父任务）
+        parent_id = self._current_msg_id
+        self._worker.push(data, priority, parent_id, task_name)
 
     async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """
@@ -256,11 +275,8 @@ class Task:
         if self._execute_func is None:
             raise RuntimeError("Task.execute() is not defined. Use @task.execute to register execute function.")
 
-        # 记录当前消息 ID
+        # 记录当前消息 ID（用于 callback 自动关联父任务）
         self._current_msg_id = msg_id
-
-        # 清空待回调任务列表
-        self._pending_callbacks.clear()
 
         try:
             # 执行核心逻辑（支持同步和异步）
