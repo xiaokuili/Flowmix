@@ -38,12 +38,14 @@ from .task import Task
 from .manager import Manager
 from .worker import Worker
 from .limiter import ConcurrencyLimiter
+from .stats_reader import StatsReader
 
 __all__ = [
     "Task",
     "Manager",
     "Worker",
     "ConcurrencyLimiter",
+    "StatsReader",
 ]
 
 __version__ = "0.2.0"

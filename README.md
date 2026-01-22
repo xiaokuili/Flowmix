@@ -4,6 +4,26 @@
 
 ---
 
+## 📦 安装
+
+### 基础安装
+
+```bash
+pip install git+https://github.com/xiaokuili/Flowmix.git
+```
+
+### 安装特定版本
+
+```bash
+# 安装指定版本标签
+pip install git+https://github.com/xiaokuili/Flowmix.git@v0.3.0
+
+# 安装指定分支
+pip install git+https://github.com/xiaokuili/Flowmix.git@main
+```
+
+---
+
 ## 🚀 快速开始
 
 ### 基础用法
@@ -87,73 +107,78 @@ INFO [worker-2] Processing task 'crawl': 3
 
 基于 asyncio 的异步并发，单个事件循环 + 多个协程，高效处理 I/O 密集型任务。
 
-### 2. 完整的状态管理
+### 2. Worker 状态查询
 
-框架自动追踪任务执行状态，支持查询任务树的完整进度：
+框架基于 SQLite 持久化任务状态，可以随时查询 Worker 的执行情况。
+
+**核心特点**：
+- 支持按 Worker ID、时间范围、任务类型等多维度筛选
+- 实时性能指标：吞吐量、成功率、平均执行时长
+- 只读操作，不影响 Worker 执行
+
+#### 基础用法
 
 ```python
-# 查询任务树统计（递归查询所有子孙任务）
-stats = worker.get_tree_stats(root_id)
+from flowmix import StatsReader
+from datetime import datetime, timedelta
+
+# 创建状态查询器（指向 Worker 使用的同一个数据库）
+reader = StatsReader(db_path=".flowmix/flowmix.db")
+
+# 查询所有 Worker 的整体执行情况
+stats = reader.get_worker_stats()
 print(stats)
 # {
-#     'total': 13,       # 总任务数
-#     'pending': 0,      # 待处理
-#     'processing': 0,   # 处理中
-#     'completed': 13,   # 已完成
-#     'failed': 0        # 失败
+#     'total': 10000,          # 总任务数
+#     'completed': 9000,       # 已完成
+#     'failed': 500,           # 失败
+#     'pending': 300,          # 待处理
+#     'processing': 200,       # 处理中
+#     'success_rate': 0.947,   # 成功率
+#     'qps': 2.78,             # 吞吐量（每秒完成数）
+#     'avg_duration_seconds': 1.5  # 平均执行时长
 # }
 
-# 判断任务树是否全部完成
-is_done = (stats['pending'] == 0 and stats['processing'] == 0)
+# 查询某个 Worker 的执行情况
+stats = reader.get_worker_stats(worker_id='worker-MacBook-12345-1234567890')
+print(f"Worker 执行: {stats['completed']}/{stats['total']} 个任务")
+print(f"成功率: {stats['success_rate']*100:.1f}%")
+print(f"吞吐量: {stats['qps']:.2f} tasks/s")
 
-# 按任务名称分组统计
-stats = worker.get_tree_stats(root_id, group_by_task=True)
-print(stats)
-# {
-#     'total': 13,
-#     'pending': 0,
-#     'processing': 0,
-#     'completed': 13,
-#     'failed': 0,
-#     'by_task': {
-#         'crawl': {'total': 10, 'completed': 10, 'failed': 0},
-#         'parse': {'total': 3, 'completed': 3, 'failed': 0}
-#     }
-# }
+# 查询今天的执行情况
+today_start = datetime.now().replace(hour=0, minute=0, second=0)
+stats = reader.get_worker_stats(start_time=today_start)
+print(f"今天执行: {stats['total']} 个任务")
 
-# 获取任务树详细信息（包含任务名称、参数、结果、父子关系）
-details = worker.get_tree_details(root_id)
-for task in details:
-    indent = '  ' if task['parent_id'] else ''
-    print(f"{indent}[{task['id']}] {task['task_name']}: {task['status']}")
-    print(f"{indent}  Parent: {task['parent_id']}, Data: {task['data']}")
-    if task['result']:
-        print(f"{indent}  Result: {task['result']}")
+# 按任务类型统计
+by_type = reader.get_worker_stats_by_task_type(start_time=today_start)
+for task_type, task_stats in by_type.items():
+    print(f"{task_type}: {task_stats['completed']}/{task_stats['total']} "
+          f"(成功率: {task_stats['success_rate']*100:.1f}%)")
 
-# 输出示例（展示完整的任务链路）：
-# [1] crawl: completed
-#   Parent: None, Data: {'url': 'http://example.com', 'depth': 0}
-#   Result: {'status': 'ok', 'links': 3}
-#   [2] crawl: completed
-#     Parent: 1, Data: {'url': 'http://example.com/page1', 'depth': 1}
-#     Result: {'status': 'ok', 'links': 0}
-#   [3] crawl: completed
-#     Parent: 1, Data: {'url': 'http://example.com/page2', 'depth': 1}
-#     Result: {'status': 'ok', 'links': 2}
-#     [4] parse: completed
-#       Parent: 3, Data: {'html': '<html>...'}
-#       Result: {'title': 'Example', 'links': [...]}
+# 列出所有 Worker
+workers = reader.list_workers()
+for w in workers:
+    status = "🟢 活跃" if w['is_active'] else "🔴 停止"
+    print(f"{status} {w['worker_id']}: {w['completed']}/{w['total_tasks']}")
+
+# 查询失败的任务
+failed = reader.get_failed_tasks(limit=10)
+for task in failed:
+    print(f"[{task['task_id']}] {task['task_type']} 失败: {task['error']}")
+
+# 错误汇总统计
+errors = reader.get_error_summary()
+for error, count in errors.items():
+    print(f"{error}: {count} 次")
+
+# 查询正在处理的任务（实时监控）
+processing = reader.get_processing_tasks()
+for task in processing:
+    print(f"Worker {task['worker_id']} 正在执行 {task['task_type']} "
+          f"(已运行 {task['duration_seconds']}秒)")
 ```
 
-**任务状态流转**：
-- `pending` → `processing` → `completed` (成功)
-- `pending` → `processing` → `failed` (失败)
-
-**数据持久化**：
-- 任务名称 (`task_name`): 记录执行的是哪个任务
-- 任务参数 (`data`): 完整保存输入参数
-- 执行结果 (`result`): 保存任务的返回值
-- 错误信息 (`error`): 失败时记录错误原因
 
 ### 3. 并发限流控制
 
