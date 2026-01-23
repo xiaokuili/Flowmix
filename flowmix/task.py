@@ -7,9 +7,9 @@ Task - 任务定义
 import hashlib
 import inspect
 import json
-import sqlite3
-import threading
 from typing import Callable, Optional, Any
+
+import aiosqlite
 
 
 class Task:
@@ -116,8 +116,8 @@ class Task:
         # 数据库配置（由 Worker 设置）
         self._db_path: Optional[str] = None
         self._queue_name: Optional[str] = None
-        # 线程本地存储（用于数据库连接）
-        self._local = threading.local()
+        # 数据库连接（异步）
+        self._db: Optional[aiosqlite.Connection] = None
 
     def execute(self, func: Callable[[dict], Any]) -> Callable:
         """
@@ -201,7 +201,7 @@ class Task:
         self._on_failure_func = func
         return func
 
-    def callback(self, task_name: str, data: dict, priority: int = 0):
+    async def callback(self, task_name: str, data: dict, priority: int = 0):
         """
         立即提交任务到队列（可在任何地方使用）
 
@@ -228,17 +228,17 @@ class Task:
 
                 # 立即提交子任务
                 for link in links:
-                    task.callback('crawl', {'url': link}, priority=10)
+                    await task.callback('crawl', {'url': link}, priority=10)
 
                 return html
 
             # 在 on_success 中使用
             @task.on_success
-            def on_success(data, result):
-                task.callback('analyze', {'html': result})
+            async def on_success(data, result):
+                await task.callback('analyze', {'html': result})
 
             # 在外部使用
-            task.callback('crawl', {'url': 'http://example.com'})
+            await task.callback('crawl', {'url': 'http://example.com'})
         """
         if not self._worker:
             raise RuntimeError(
@@ -248,7 +248,7 @@ class Task:
 
         # 立即提交到队列（如果在 execute 中，自动关联父任务）
         parent_id = self._current_msg_id
-        self._worker.push(data, priority, parent_id, task_name)
+        await self._worker.push(data, priority, parent_id, task_name)
 
     async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """
@@ -320,21 +320,20 @@ class Task:
         self._db_path = db_path
         self._queue_name = queue_name
 
-    def _get_db_connection(self) -> sqlite3.Connection:
-        """获取当前线程的数据库连接（用于缓存查询）"""
-        if not hasattr(self._local, 'conn'):
+    async def _get_db_connection(self) -> aiosqlite.Connection:
+        """获取数据库连接（用于缓存查询）"""
+        if self._db is None:
             if not self._db_path:
                 raise RuntimeError("Database not configured. Worker should call set_db_config().")
 
-            self._local.conn = sqlite3.connect(
+            self._db = await aiosqlite.connect(
                 self._db_path,
-                check_same_thread=False,
                 timeout=30.0
             )
-            self._local.conn.row_factory = sqlite3.Row
+            self._db.row_factory = aiosqlite.Row
             # 启用 WAL 模式
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
-        return self._local.conn
+            await self._db.execute("PRAGMA journal_mode=WAL")
+        return self._db
 
     def _generate_fingerprint(self, data: dict) -> str:
         """
@@ -354,7 +353,7 @@ class Task:
         )
         return hashlib.sha256(normalized.encode()).hexdigest()
 
-    def check_cache(self, data: dict) -> Optional[Any]:
+    async def check_cache(self, data: dict) -> Optional[Any]:
         """
         检查缓存是否命中
 
@@ -368,11 +367,11 @@ class Task:
             return None
 
         fingerprint = self._generate_fingerprint(data)
-        conn = self._get_db_connection()
+        conn = await self._get_db_connection()
 
         if self.dedup_ttl is None:
             # 永久缓存：只查找 completed 的任务
-            cursor = conn.execute(f"""
+            cursor = await conn.execute(f"""
                 SELECT result FROM {self._queue_name}
                 WHERE fingerprint = ? AND status = 'completed'
                 ORDER BY completed_at DESC
@@ -380,7 +379,7 @@ class Task:
             """, (fingerprint,))
         else:
             # 带 TTL：查找最近 ttl 秒内完成的任务
-            cursor = conn.execute(f"""
+            cursor = await conn.execute(f"""
                 SELECT result FROM {self._queue_name}
                 WHERE fingerprint = ?
                   AND status = 'completed'
@@ -389,7 +388,7 @@ class Task:
                 LIMIT 1
             """, (fingerprint, self.dedup_ttl / 86400.0))  # 转换为天数
 
-        row = cursor.fetchone()
+        row = await cursor.fetchone()
         if row and row['result']:
             return json.loads(row['result'])
 

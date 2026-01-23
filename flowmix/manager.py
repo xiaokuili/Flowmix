@@ -5,13 +5,14 @@ Manager - 消息队列管理器
 不依赖 Task、Worker 等任何业务概念
 """
 
+import asyncio
 import json
 import logging
 import os
-import sqlite3
-import threading
 import time
 from typing import Optional, Dict, Any
+
+import aiosqlite
 
 
 class Manager:
@@ -74,74 +75,70 @@ class Manager:
         self.queue_name = queue_name
         self.timeout = timeout
 
-        # 每个线程使用独立的连接
-        self._local = threading.local()
-
-        # 初始化数据库
-        self._init_db()
+        # 数据库连接（异步）
+        self._db: Optional[aiosqlite.Connection] = None
+        self._initialized = False
+        self._init_lock = asyncio.Lock()
 
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"Manager initialized with db_path={db_path}, queue_name={queue_name}")
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """获取当前线程的数据库连接"""
-        if not hasattr(self._local, 'conn'):
-            self._local.conn = sqlite3.connect(
+    async def _get_connection(self) -> aiosqlite.Connection:
+        """获取数据库连接"""
+        if self._db is None:
+            self._db = await aiosqlite.connect(
                 self.db_path,
-                check_same_thread=False,
                 timeout=30.0  # 锁超时
             )
-            self._local.conn.row_factory = sqlite3.Row
+            self._db.row_factory = aiosqlite.Row
             # 启用 WAL 模式，提高并发性能
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
-        return self._local.conn
+            await self._db.execute("PRAGMA journal_mode=WAL")
+        return self._db
 
-    def _init_db(self):
+    async def _init_db(self):
         """初始化数据库表"""
-        conn = self._get_connection()
-        conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {self.queue_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id INTEGER,
-                task_name TEXT,
-                data TEXT NOT NULL,
-                priority INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                consumer TEXT,
-                error TEXT,
-                result TEXT,
-                fingerprint TEXT,
-                created_at REAL DEFAULT (julianday('now')),
-                updated_at REAL DEFAULT (julianday('now')),
-                completed_at REAL
-            )
-        """)
+        async with self._init_lock:
+            if self._initialized:
+                return
 
-        # 迁移：为已存在的表添加 fingerprint 字段（如果不存在）
-        cursor = conn.execute(f"PRAGMA table_info({self.queue_name})")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'fingerprint' not in columns:
-            self.logger.info(f"Adding fingerprint column to {self.queue_name} table")
-            conn.execute(f"ALTER TABLE {self.queue_name} ADD COLUMN fingerprint TEXT")
+            conn = await self._get_connection()
+            await conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.queue_name} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_id INTEGER,
+                    task_name TEXT,
+                    data TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
+                    consumer TEXT,
+                    error TEXT,
+                    result TEXT,
+                    fingerprint TEXT,
+                    created_at REAL DEFAULT (julianday('now')),
+                    updated_at REAL DEFAULT (julianday('now')),
+                    completed_at REAL
+                )
+            """)
 
-        # 创建索引加速查询（优先级降序，ID 升序）
-        conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_status
-            ON {self.queue_name}(status, priority DESC, id ASC)
-        """)
-        # 创建索引加速 parent_id 查询
-        conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_parent
-            ON {self.queue_name}(parent_id)
-        """)
-        # 创建索引加速 fingerprint 查询（用于去重）
-        conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_fingerprint
-            ON {self.queue_name}(fingerprint, status, completed_at DESC)
-        """)
-        conn.commit()
+            # 创建索引加速查询（优先级降序，ID 升序）
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_status
+                ON {self.queue_name}(status, priority DESC, id ASC)
+            """)
+            # 创建索引加速 parent_id 查询
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_parent
+                ON {self.queue_name}(parent_id)
+            """)
+            # 创建索引加速 fingerprint 查询（用于去重）
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{self.queue_name}_fingerprint
+                ON {self.queue_name}(fingerprint, status, completed_at DESC)
+            """)
+            await conn.commit()
+            self._initialized = True
 
-    def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None, task_name: Optional[str] = None) -> int:
+    async def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None, task_name: Optional[str] = None) -> int:
         """
         将消息放入队列
 
@@ -164,20 +161,23 @@ class Manager:
             child_id = manager.push({"url": "http://example.com/page1"}, parent_id=root_id, task_name="crawl")
 
             # 高优先级任务（DFS）
-            msg_id = manager.push({"url": "http://example.com"}, priority=10, task_name="parse")
+            msg_id = await manager.push({"url": "http://example.com"}, priority=10, task_name="parse")
         """
-        conn = self._get_connection()
-        cursor = conn.execute(
+        if not self._initialized:
+            await self._init_db()
+
+        conn = await self._get_connection()
+        cursor = await conn.execute(
             f"INSERT INTO {self.queue_name} (data, priority, parent_id, task_name) VALUES (?, ?, ?, ?)",
             (json.dumps(data), priority, parent_id, task_name)
         )
-        conn.commit()
+        await conn.commit()
 
         msg_id = cursor.lastrowid
         self.logger.debug(f"Pushed message {msg_id} to queue (task_name={task_name}, priority={priority}, parent_id={parent_id})")
         return msg_id
 
-    def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
+    async def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
         """
         从队列取出消息
 
@@ -189,33 +189,35 @@ class Manager:
             如果没有消息返回 None
 
         Example:
-            msg = manager.pop("worker-1")
+            msg = await manager.pop("worker-1")
             if msg:
                 msg_id = msg["id"]  # 用于 ack
                 url = msg["url"]    # 业务数据
         """
-        conn = self._get_connection()
+        if not self._initialized:
+            await self._init_db()
+
+        conn = await self._get_connection()
         start_time = time.time()
 
         while True:
             # 使用事务 + SELECT ... FOR UPDATE 实现原子性获取
             try:
-                conn.execute("BEGIN IMMEDIATE")
-
-                cursor = conn.execute(f"""
+                # 使用异步事务（aiosqlite 自动处理事务）
+                cursor = await conn.execute(f"""
                     SELECT id, data, task_name FROM {self.queue_name}
                     WHERE status = 'pending'
                     ORDER BY priority DESC, id ASC
                     LIMIT 1
                 """)
 
-                row = cursor.fetchone()
+                row = await cursor.fetchone()
 
                 if row:
                     msg_id, data_json, task_name = row['id'], row['data'], row['task_name']
 
                     # 标记为处理中
-                    conn.execute(f"""
+                    await conn.execute(f"""
                         UPDATE {self.queue_name}
                         SET status = 'processing',
                             consumer = ?,
@@ -223,7 +225,7 @@ class Manager:
                         WHERE id = ?
                     """, (consumer_name, msg_id))
 
-                    conn.commit()
+                    await conn.commit()
 
                     # 解析数据
                     data = json.loads(data_json)
@@ -233,20 +235,17 @@ class Manager:
                     return result
 
                 else:
-                    conn.commit()
-
                     # 检查超时
                     if time.time() - start_time >= self.timeout:
                         return None
 
                     # 没有消息，等待一小段时间再重试
-                    time.sleep(0.1)
+                    await asyncio.sleep(0.1)
 
-            except sqlite3.OperationalError as e:
-                conn.rollback()
+            except aiosqlite.OperationalError as e:
                 if "locked" in str(e).lower():
                     # 数据库被锁，短暂等待后重试
-                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                     if time.time() - start_time >= self.timeout:
                         self.logger.error(f"Timeout waiting for database lock: {e}")
                         return None
@@ -254,7 +253,7 @@ class Manager:
                     self.logger.error(f"Database error: {e}")
                     return None
 
-    def ack(self, message_id: int, failed: bool = False, error: str = None, result: Any = None, fingerprint: Optional[str] = None):
+    async def ack(self, message_id: int, failed: bool = False, error: str = None, result: Any = None, fingerprint: Optional[str] = None):
         """
         确认消息已处理（标记为 completed/failed，不再删除以保留任务树结构）
 
@@ -266,76 +265,90 @@ class Manager:
             fingerprint: 任务指纹（可选，用于去重缓存，只在成功时保存）
 
         Example:
-            msg = manager.pop("worker-1")
+            msg = await manager.pop("worker-1")
             # ... 处理消息 ...
 
             # 成功
-            manager.ack(msg["id"], result={"status": "ok"}, fingerprint="abc123...")
+            await manager.ack(msg["id"], result={"status": "ok"}, fingerprint="abc123...")
 
             # 失败（不保存 fingerprint）
-            manager.ack(msg["id"], failed=True, error="Connection timeout")
+            await manager.ack(msg["id"], failed=True, error="Connection timeout")
         """
-        conn = self._get_connection()
+        if not self._initialized:
+            await self._init_db()
+
+        conn = await self._get_connection()
         status = 'failed' if failed else 'completed'
         result_json = json.dumps(result) if result is not None else None
 
         # 只在成功时保存 fingerprint
         if not failed and fingerprint:
-            conn.execute(
+            await conn.execute(
                 f"""UPDATE {self.queue_name}
                     SET status = ?, error = ?, result = ?, fingerprint = ?, completed_at = julianday('now'), updated_at = julianday('now')
                     WHERE id = ?""",
                 (status, error, result_json, fingerprint, message_id)
             )
         else:
-            conn.execute(
+            await conn.execute(
                 f"""UPDATE {self.queue_name}
                     SET status = ?, error = ?, result = ?, completed_at = julianday('now'), updated_at = julianday('now')
                     WHERE id = ?""",
                 (status, error, result_json, message_id)
             )
 
-        conn.commit()
+        await conn.commit()
         self.logger.debug(f"ACKed message {message_id} as {status}")
 
-    def get_pending_count(self) -> int:
+    async def get_pending_count(self) -> int:
         """
         获取待处理消息数量
 
         Returns:
             待处理的消息数量
         """
-        conn = self._get_connection()
-        cursor = conn.execute(
+        if not self._initialized:
+            await self._init_db()
+
+        conn = await self._get_connection()
+        cursor = await conn.execute(
             f"SELECT COUNT(*) FROM {self.queue_name} WHERE status = 'pending'"
         )
-        return cursor.fetchone()[0]
+        row = await cursor.fetchone()
+        return row[0]
 
-    def get_stream_length(self) -> int:
+    async def get_stream_length(self) -> int:
         """
         获取队列总长度
 
         Returns:
             队列中的消息总数（包括 pending 和 processing）
         """
-        conn = self._get_connection()
-        cursor = conn.execute(f"SELECT COUNT(*) FROM {self.queue_name}")
-        return cursor.fetchone()[0]
+        if not self._initialized:
+            await self._init_db()
 
-    def clear_all(self):
+        conn = await self._get_connection()
+        cursor = await conn.execute(f"SELECT COUNT(*) FROM {self.queue_name}")
+        row = await cursor.fetchone()
+        return row[0]
+
+    async def clear_all(self):
         """
         清空所有消息（谨慎使用）
 
         警告：此操作不可逆
         """
-        conn = self._get_connection()
-        conn.execute(f"DELETE FROM {self.queue_name}")
-        conn.commit()
+        if not self._initialized:
+            await self._init_db()
+
+        conn = await self._get_connection()
+        await conn.execute(f"DELETE FROM {self.queue_name}")
+        await conn.commit()
         self.logger.warning("Cleared all messages from queue")
 
-    def close(self):
+    async def close(self):
         """关闭数据库连接"""
-        if hasattr(self._local, 'conn'):
-            self._local.conn.close()
-            delattr(self._local, 'conn')
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
         self.logger.info("Closed SQLite connection")

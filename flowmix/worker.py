@@ -141,7 +141,7 @@ class Worker:
         timestamp = int(time.time())
         return f"worker-{hostname}-{pid}-{timestamp}"
 
-    def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None, task_name: Optional[str] = None) -> int:
+    async def push(self, data: Dict[str, Any], priority: int = 0, parent_id: Optional[int] = None, task_name: Optional[str] = None) -> int:
         """
         提交任务到队列
 
@@ -156,16 +156,16 @@ class Worker:
 
         Example:
             # 提交根任务
-            root_id = worker.push({"url": "http://example.com"}, task_name="crawl")
+            root_id = await worker.push({"url": "http://example.com"}, task_name="crawl")
 
             # 提交子任务
-            child_id = worker.push({"url": "http://example.com/page1"}, parent_id=root_id, task_name="crawl")
+            child_id = await worker.push({"url": "http://example.com/page1"}, parent_id=root_id, task_name="crawl")
         """
         # 如果未指定 task_name，使用默认任务名（当只有单个 Task 时）
         if task_name is None and len(self.tasks) == 1:
             task_name = list(self.tasks.keys())[0]
 
-        return self._manager.push(data, priority, parent_id, task_name)
+        return await self._manager.push(data, priority, parent_id, task_name)
 
     def run(self):
         """
@@ -216,9 +216,8 @@ class Worker:
 
         while self.running:
             try:
-                # 从队列获取消息（同步调用，在线程池中执行）
-                loop = asyncio.get_event_loop()
-                msg = await loop.run_in_executor(None, self._manager.pop, consumer_name)
+                # 从队列获取消息（异步调用）
+                msg = await self._manager.pop(consumer_name)
 
                 if not msg:
                     # 短暂等待，避免空转
@@ -265,10 +264,7 @@ class Worker:
                 f"Message {msg_id} has no task_name. When multiple tasks are registered, "
                 f"task_name must be specified. Available tasks: {list(self.tasks.keys())}"
             )
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                self._manager.ack,
+            await self._manager.ack(
                 msg_id,
                 True,  # failed
                 "Missing task_name field"
@@ -287,8 +283,7 @@ class Worker:
             self.logger.error(
                 f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
             )
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._manager.ack, msg_id)
+            await self._manager.ack(msg_id)
             return
 
         # ========== 缓存检查（Task 层功能） ==========
@@ -297,12 +292,7 @@ class Worker:
 
         if task.dedup:
             # Task 检查缓存
-            loop = asyncio.get_event_loop()
-            cached_result = await loop.run_in_executor(
-                None,
-                task.check_cache,
-                task_data
-            )
+            cached_result = await task.check_cache(task_data)
 
             if cached_result is not None:
                 # 命中缓存，直接返回结果
@@ -317,9 +307,7 @@ class Worker:
                 self.stats["success"] += 1
 
                 # 标记为 completed，使用缓存的结果
-                await loop.run_in_executor(
-                    None,
-                    self._manager.ack,
+                await self._manager.ack(
                     msg_id,
                     False,  # 未失败
                     None,   # 无错误
@@ -365,10 +353,7 @@ class Worker:
                 fingerprint = task.get_fingerprint(task_data)
 
                 # 确认消息（标记为 completed），保存执行结果和指纹
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    self._manager.ack,
+                await self._manager.ack(
                     msg_id,
                     False,  # 未失败
                     None,   # 无错误
@@ -411,8 +396,7 @@ class Worker:
         )
 
         # 确认消息（标记为 failed）
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._manager.ack, msg_id, True, str(last_error))
+        await self._manager.ack(msg_id, True, str(last_error))
 
     def _signal_handler(self, signum, _):
         """信号处理器（优雅关闭）"""
