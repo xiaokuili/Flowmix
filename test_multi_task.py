@@ -85,21 +85,15 @@ async def test_correct_usage():
     # 启动 worker 处理（3秒后自动停止）
     print("🚀 启动 Worker 处理任务...\n")
 
-    # 启动 worker
-    worker.running = True
-    workers = [
-        asyncio.create_task(worker._worker_loop_async(f"worker-{i}"))
-        for i in range(worker.num_workers)
-    ]
+    # 启动 worker（使用公开 API）
+    worker_task = asyncio.create_task(worker.run())
 
     # 运行 3 秒后停止
     await asyncio.sleep(3)
-    worker.running = False
 
-    # 等待所有 worker 停止
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
+    # 停止 worker
+    worker.stop()
+    await worker_task
 
     # 显示统计
     stats = worker.get_stats()
@@ -149,15 +143,12 @@ async def test_missing_task_name():
     # 尝试处理这个消息
     print("🚀 启动 Worker，观察错误处理...\n")
 
-    worker.running = True
-    workers = [asyncio.create_task(worker._worker_loop_async("test-worker"))]
+    worker_task = asyncio.create_task(worker.run())
 
     await asyncio.sleep(1)  # 运行1秒
-    worker.running = False
 
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
+    worker.stop()
+    await worker_task
 
     # 检查消息状态
     cursor = await conn.execute("SELECT status, error FROM tasks WHERE id = ?", (msg_id,))
@@ -204,15 +195,12 @@ async def test_single_task():
 
     print("🚀 启动 Worker...\n")
 
-    worker.running = True
-    workers = [asyncio.create_task(worker._worker_loop_async("worker-0"))]
+    worker_task = asyncio.create_task(worker.run())
 
     await asyncio.sleep(2)
-    worker.running = False
 
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
+    worker.stop()
+    await worker_task
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计: 成功 {stats['success']}/{stats['processed']}")

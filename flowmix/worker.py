@@ -167,24 +167,40 @@ class Worker:
 
         return await self._manager.push(data, priority, parent_id, task_name)
 
-    def run(self):
+    async def run(self):
         """
-        启动 Worker（阻塞运行）
+        启动 Worker（异步运行）
 
-        使用 asyncio 并发执行多个协程
+        在异步环境中直接使用，或在同步环境中通过 asyncio.run() 运行
+
+        Example:
+            # 异步环境（如测试）：后台运行
+            worker = Worker(tasks=task, num_workers=3)
+            await worker.push({'url': 'http://example.com'})
+
+            task = asyncio.create_task(worker.run())
+            await asyncio.sleep(5)  # 运行5秒
+            worker.stop()
+            await task
+
+            # 同步环境（如脚本）：阻塞运行直到停止
+            worker = Worker(tasks=task, num_workers=3)
+            asyncio.run(worker.run())  # 按 Ctrl+C 停止
         """
         self.running = True
 
-        # 注册信号处理
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # 在非事件循环环境中注册信号处理
+        try:
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        except ValueError:
+            # 在某些环境中可能无法注册信号（如非主线程）
+            pass
 
         self.logger.info(f"Worker {self.name} started with {self.num_workers} concurrent workers")
 
         try:
-            # 运行异步事件循环
-            asyncio.run(self._run_async_workers())
-
+            await self._run_async_workers()
         except Exception as e:
             self.logger.error(f"Worker error: {e}", exc_info=True)
             raise

@@ -30,20 +30,14 @@ async def main():
 
     # 启动 worker
     print("🚀 启动 Worker...")
-    worker.running = True
-    workers = [
-        asyncio.create_task(worker._worker_loop_async(f"worker-{i}"))
-        for i in range(worker.num_workers)
-    ]
+    worker_task = asyncio.create_task(worker.run())
 
     # 等待2秒
     await asyncio.sleep(2)
-    worker.running = False
 
     # 停止
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
+    worker.stop()
+    await worker_task
 
     # 统计
     stats = worker.get_stats()
