@@ -91,15 +91,8 @@ async def test_callback_in_execute():
 
     print("🚀 启动 Worker...\n")
 
-    # 启动 worker（使用公开 API）
-    worker_task = asyncio.create_task(worker.run())
-
-    # 等待所有任务完成（最多5秒）
-    await asyncio.sleep(5)
-
-    # 停止 worker
-    worker.stop()
-    await worker_task
+    # 直接运行到队列为空
+    await worker.run()
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计:")
@@ -131,12 +124,7 @@ async def test_callback_in_on_success():
 
     print("🚀 启动 Worker...\n")
 
-    worker_task = asyncio.create_task(worker.run())
-
-    await asyncio.sleep(3)
-
-    worker.stop()
-    await worker_task
+    await worker.run()
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计:")
@@ -167,18 +155,7 @@ async def test_callback_with_parent_tracking():
 
     print("🚀 启动 Worker...\n")
 
-    worker.running = True
-    workers = [
-        asyncio.create_task(worker._worker_loop_async(f"worker-{i}"))
-        for i in range(worker.num_workers)
-    ]
-
-    await asyncio.sleep(4)
-    worker.running = False
-
-    for w in workers:
-        w.cancel()
-    await asyncio.gather(*workers, return_exceptions=True)
+    await worker.run()
 
     # 查询任务树
     reader = StatsReader(db_path="test_callback_parent.db")

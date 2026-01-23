@@ -28,16 +28,9 @@ async def main():
     await worker.push({'value': 2})
     await worker.push({'value': 3})
 
-    # 启动 worker
+    # 启动 worker（直接运行到队列为空）
     print("🚀 启动 Worker...")
-    worker_task = asyncio.create_task(worker.run())
-
-    # 等待2秒
-    await asyncio.sleep(2)
-
-    # 停止
-    worker.stop()
-    await worker_task
+    await worker.run()
 
     # 统计
     stats = worker.get_stats()

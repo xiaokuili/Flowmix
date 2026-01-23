@@ -167,42 +167,78 @@ class Worker:
 
         return await self._manager.push(data, priority, parent_id, task_name)
 
-    async def run(self):
+    async def run(self, check_interval: float = 0.5, max_idle_time: float = 2.0):
         """
-        启动 Worker（异步运行）
+        启动 Worker（运行直到队列为空）
 
-        在异步环境中直接使用，或在同步环境中通过 asyncio.run() 运行
+        默认行为：自动运行直到队列为空并且所有任务处理完成
+        适用于测试、批处理任务、以及大部分使用场景
+
+        Args:
+            check_interval: 检查队列的时间间隔（秒）
+            max_idle_time: 队列为空后等待的最大时间（秒），确保所有任务都完成
 
         Example:
-            # 异步环境（如测试）：后台运行
+            # 最简单的用法（直接 await）
             worker = Worker(tasks=task, num_workers=3)
             await worker.push({'url': 'http://example.com'})
+            await worker.run()  # 自动运行直到完成
 
-            task = asyncio.create_task(worker.run())
-            await asyncio.sleep(5)  # 运行5秒
-            worker.stop()
-            await task
-
-            # 同步环境（如脚本）：阻塞运行直到停止
-            worker = Worker(tasks=task, num_workers=3)
-            asyncio.run(worker.run())  # 按 Ctrl+C 停止
+            # 同步脚本
+            asyncio.run(worker.run())
         """
         self.running = True
 
-        # 在非事件循环环境中注册信号处理
+        # 注册信号处理
         try:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
         except ValueError:
-            # 在某些环境中可能无法注册信号（如非主线程）
             pass
 
         self.logger.info(f"Worker {self.name} started with {self.num_workers} concurrent workers")
 
+        # 创建 worker 协程
+        workers = [
+            asyncio.create_task(self._worker_loop_async(f"{self.name}-{i}"))
+            for i in range(self.num_workers)
+        ]
+
+        # 监控队列，直到为空
+        idle_start = None
         try:
-            await self._run_async_workers()
+            while self.running:
+                pending_count = await self._manager.get_pending_count()
+
+                if pending_count == 0:
+                    # 队列为空，开始计时
+                    if idle_start is None:
+                        idle_start = asyncio.get_event_loop().time()
+                        self.logger.debug("Queue is empty, waiting for tasks to complete...")
+
+                    # 检查是否已经空闲足够长时间
+                    idle_duration = asyncio.get_event_loop().time() - idle_start
+                    if idle_duration >= max_idle_time:
+                        self.logger.info(f"Queue empty for {idle_duration:.1f}s, stopping workers")
+                        break
+                else:
+                    # 队列不为空，重置计时
+                    idle_start = None
+
+                await asyncio.sleep(check_interval)
+
+            # 停止所有 worker
+            self.running = False
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
         except Exception as e:
             self.logger.error(f"Worker error: {e}", exc_info=True)
+            self.running = False
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
             raise
         finally:
             self._cleanup()
