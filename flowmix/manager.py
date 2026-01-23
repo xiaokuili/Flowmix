@@ -201,31 +201,28 @@ class Manager:
         start_time = time.time()
 
         while True:
-            # 使用事务 + SELECT ... FOR UPDATE 实现原子性获取
+            # 使用 UPDATE ... RETURNING 实现原子性获取（避免多 worker 重复消费）
             try:
-                # 使用异步事务（aiosqlite 自动处理事务）
+                # 原子操作：只有一个 worker 能成功 UPDATE 并获取数据
                 cursor = await conn.execute(f"""
-                    SELECT id, data, task_name FROM {self.queue_name}
-                    WHERE status = 'pending'
-                    ORDER BY priority DESC, id ASC
-                    LIMIT 1
-                """)
+                    UPDATE {self.queue_name}
+                    SET status = 'processing',
+                        consumer = ?,
+                        updated_at = julianday('now')
+                    WHERE id = (
+                        SELECT id FROM {self.queue_name}
+                        WHERE status = 'pending'
+                        ORDER BY priority DESC, id ASC
+                        LIMIT 1
+                    )
+                    RETURNING id, data, task_name
+                """, (consumer_name,))
 
                 row = await cursor.fetchone()
+                await conn.commit()
 
                 if row:
                     msg_id, data_json, task_name = row['id'], row['data'], row['task_name']
-
-                    # 标记为处理中
-                    await conn.execute(f"""
-                        UPDATE {self.queue_name}
-                        SET status = 'processing',
-                            consumer = ?,
-                            updated_at = julianday('now')
-                        WHERE id = ?
-                    """, (consumer_name, msg_id))
-
-                    await conn.commit()
 
                     # 解析数据
                     data = json.loads(data_json)
