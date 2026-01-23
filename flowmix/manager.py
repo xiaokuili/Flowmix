@@ -56,7 +56,7 @@ class Manager:
         self,
         db_path: str = ".flowmix/flowmix.db",
         queue_name: str = "tasks",
-        timeout: float = 5.0,
+        timeout: float = 1.0,
     ):
         """
         初始化 Manager
@@ -64,7 +64,7 @@ class Manager:
         Args:
             db_path: SQLite 数据库文件路径（默认: .flowmix/flowmix.db）
             queue_name: 队列名称（表名）
-            timeout: pop() 等待超时时间（秒）
+            timeout: pop() 等待超时时间（秒，默认 1.0 秒以便快速响应停止信号）
         """
         # 确保数据库目录存在
         db_dir = os.path.dirname(db_path)

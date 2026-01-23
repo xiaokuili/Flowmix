@@ -28,7 +28,7 @@ async def main():
     await worker.push({'value': 2})
     await worker.push({'value': 3})
 
-    # 启动 worker（直接运行到队列为空）
+    # 启动 worker（自动停止模式：队列为空后停止）
     print("🚀 启动 Worker...")
     await worker.run()
 

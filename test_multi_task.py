@@ -82,11 +82,11 @@ async def test_correct_usage():
 
     print(f"✓ 已提交 5 个任务\n")
 
-    # 启动 worker 处理（直接运行到队列为空）
+    # 启动 worker 处理（自动停止模式：队列为空后停止）
     print("🚀 启动 Worker 处理任务...\n")
 
     # 直接运行到队列为空
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     # 显示统计
     stats = worker.get_stats()
@@ -136,7 +136,7 @@ async def test_missing_task_name():
     # 尝试处理这个消息
     print("🚀 启动 Worker，观察错误处理...\n")
 
-    await worker.run(max_idle_time=1.0)
+    await worker.run(auto_stop=True, max_idle_time=1.0)
 
     # 检查消息状态
     cursor = await conn.execute("SELECT status, error FROM tasks WHERE id = ?", (msg_id,))
@@ -183,7 +183,7 @@ async def test_single_task():
 
     print("🚀 启动 Worker...\n")
 
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计: 成功 {stats['success']}/{stats['processed']}")

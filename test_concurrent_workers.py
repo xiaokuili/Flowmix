@@ -52,7 +52,7 @@ async def test_concurrent_workers():
     print(f"🚀 启动 20 个并发 Worker...\n")
 
     # 运行到队列为空
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     # 验证结果
     print(f"\n📊 执行结果:")
@@ -143,7 +143,7 @@ async def test_with_callback():
     print(f"🚀 启动 20 个并发 Worker...\n")
 
     # 运行
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     # 验证
     expected_total = num_root_tasks * 4  # 5 个根任务 + 5*3 个子任务

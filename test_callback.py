@@ -92,7 +92,7 @@ async def test_callback_in_execute():
     print("🚀 启动 Worker...\n")
 
     # 直接运行到队列为空
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计:")
@@ -124,7 +124,7 @@ async def test_callback_in_on_success():
 
     print("🚀 启动 Worker...\n")
 
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     stats = worker.get_stats()
     print(f"\n📊 执行统计:")
@@ -155,7 +155,7 @@ async def test_callback_with_parent_tracking():
 
     print("🚀 启动 Worker...\n")
 
-    await worker.run()
+    await worker.run(auto_stop=True)
 
     # 查询任务树
     reader = StatsReader(db_path="test_callback_parent.db")

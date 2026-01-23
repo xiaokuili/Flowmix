@@ -118,6 +118,7 @@ class Worker:
 
         # 控制标志
         self.running = False
+        self._stop_event = None  # 停止事件，在 run() 中初始化
 
         # 并发限流器（全局单例）
         self._limiter = ConcurrencyLimiter()
@@ -167,27 +168,31 @@ class Worker:
 
         return await self._manager.push(data, priority, parent_id, task_name)
 
-    async def run(self, check_interval: float = 0.5, max_idle_time: float = 2.0):
+    async def run(self, auto_stop: bool = False, check_interval: float = 0.5, max_idle_time: float = 2.0):
         """
-        启动 Worker（运行直到队列为空）
+        启动 Worker
 
-        默认行为：自动运行直到队列为空并且所有任务处理完成
-        适用于测试、批处理任务、以及大部分使用场景
+        默认行为：持续运行等待新任务，直到收到停止信号（Ctrl+C 或 stop()）
+        适用于生产环境、长期运行的后台服务
 
         Args:
-            check_interval: 检查队列的时间间隔（秒）
-            max_idle_time: 队列为空后等待的最大时间（秒），确保所有任务都完成
+            auto_stop: 是否自动停止（默认 False）
+                      - False: 持续运行，直到收到停止信号（适合生产环境）
+                      - True: 队列为空后自动停止（适合测试、批处理任务）
+            check_interval: 检查队列的时间间隔（秒），仅在 auto_stop=True 时使用
+            max_idle_time: 队列为空后等待的最大时间（秒），仅在 auto_stop=True 时使用
 
         Example:
-            # 最简单的用法（直接 await）
+            # 生产环境：持续运行
             worker = Worker(tasks=task, num_workers=3)
             await worker.push({'url': 'http://example.com'})
-            await worker.run()  # 自动运行直到完成
+            await worker.run()  # 一直运行，按 Ctrl+C 停止
 
-            # 同步脚本
-            asyncio.run(worker.run())
+            # 测试/批处理：自动停止
+            await worker.run(auto_stop=True)  # 队列为空后自动停止
         """
         self.running = True
+        self._stop_event = asyncio.Event()  # 在事件循环中创建停止事件
 
         # 注册信号处理
         try:
@@ -204,38 +209,44 @@ class Worker:
             for i in range(self.num_workers)
         ]
 
-        # 监控队列，直到为空
-        idle_start = None
         try:
-            while self.running:
-                pending_count = await self._manager.get_pending_count()
+            if auto_stop:
+                # 自动停止模式：监控队列，直到为空
+                idle_start = None
+                while self.running:
+                    pending_count = await self._manager.get_pending_count()
 
-                if pending_count == 0:
-                    # 队列为空，开始计时
-                    if idle_start is None:
-                        idle_start = asyncio.get_event_loop().time()
-                        self.logger.debug("Queue is empty, waiting for tasks to complete...")
+                    if pending_count == 0:
+                        # 队列为空，开始计时
+                        if idle_start is None:
+                            idle_start = asyncio.get_event_loop().time()
+                            self.logger.debug("Queue is empty, waiting for tasks to complete...")
 
-                    # 检查是否已经空闲足够长时间
-                    idle_duration = asyncio.get_event_loop().time() - idle_start
-                    if idle_duration >= max_idle_time:
-                        self.logger.info(f"Queue empty for {idle_duration:.1f}s, stopping workers")
-                        break
-                else:
-                    # 队列不为空，重置计时
-                    idle_start = None
+                        # 检查是否已经空闲足够长时间
+                        idle_duration = asyncio.get_event_loop().time() - idle_start
+                        if idle_duration >= max_idle_time:
+                            self.logger.info(f"Queue empty for {idle_duration:.1f}s, stopping workers")
+                            break
+                    else:
+                        # 队列不为空，重置计时
+                        idle_start = None
 
-                await asyncio.sleep(check_interval)
+                    await asyncio.sleep(check_interval)
 
-            # 停止所有 worker
-            self.running = False
-            for w in workers:
-                w.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
+                # 停止所有 worker
+                self.running = False
+                self._stop_event.set()
+                for w in workers:
+                    w.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
+            else:
+                # 持续运行模式：等待所有 worker 协程完成（通常是收到停止信号后）
+                await asyncio.gather(*workers, return_exceptions=True)
 
         except Exception as e:
             self.logger.error(f"Worker error: {e}", exc_info=True)
             self.running = False
+            self._stop_event.set()  # 设置停止事件
             for w in workers:
                 w.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
@@ -266,15 +277,24 @@ class Worker:
         """异步 Worker 循环：持续从队列拉取并处理消息"""
         self.logger.debug(f"Worker {consumer_name} started")
 
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 # 从队列获取消息（异步调用）
                 msg = await self._manager.pop(consumer_name)
 
                 if not msg:
+                    # 检查是否需要停止
+                    if self._stop_event.is_set():
+                        break
                     # 短暂等待，避免空转
                     await asyncio.sleep(0.1)
                     continue
+
+                # 处理消息前再次检查停止信号
+                if self._stop_event.is_set():
+                    # 把消息放回队列（将状态重置为 pending）
+                    self.logger.info(f"Worker {consumer_name} stopping, message {msg['id']} will be requeued")
+                    break
 
                 # 处理消息（异步）
                 await self._process_message_async(msg, consumer_name)
@@ -454,6 +474,8 @@ class Worker:
         """信号处理器（优雅关闭）"""
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
+        if self._stop_event:
+            self._stop_event.set()  # 设置停止事件，立即通知所有 worker
 
     def _cleanup(self):
         """清理资源"""
@@ -462,8 +484,11 @@ class Worker:
         )
 
     def stop(self):
-        """停止 Worker"""
+        """停止 Worker（设置停止标志和事件）"""
+        self.logger.info("Stopping worker...")
         self.running = False
+        if self._stop_event:
+            self._stop_event.set()  # 设置停止事件，立即通知所有 worker
 
     def get_stats(self) -> Dict[str, int]:
         """
