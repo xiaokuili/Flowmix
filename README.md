@@ -4,6 +4,22 @@
 
 ---
 
+## 🎯 快速验证
+
+```bash
+# 克隆仓库
+git clone https://github.com/xiaokuili/Flowmix.git
+cd Flowmix
+
+# 运行示例查看效果
+python examples/dedup.py          # 去重效果：10 个任务只执行 5 次
+python examples/concurrency.py    # 并发效果：10 workers 比 1 worker 快 10x
+python examples/rate_limit.py     # 限流效果：精确控制每秒并发数
+python examples/stats.py          # 状态查询：实时监控执行情况
+```
+
+---
+
 ## 📦 安装
 
 ### 基础安装
@@ -101,6 +117,8 @@ INFO [worker-2] Processing task 'crawl': 3
 
 基于 asyncio 的异步并发，单个事件循环 + 多个协程，高效处理 I/O 密集型任务。
 
+**效果**：50 个 I/O 任务，10 workers 耗时 0.5 秒，1 worker 耗时 5 秒，加速 10x
+
 ### 2. Worker 状态查询
 
 框架基于 SQLite 持久化任务状态，可以随时查询 Worker 的执行情况。
@@ -109,6 +127,8 @@ INFO [worker-2] Processing task 'crawl': 3
 - 支持按 Worker ID、时间范围、任务类型等多维度筛选
 - 实时性能指标：吞吐量、成功率、平均执行时长
 - 只读操作，不影响 Worker 执行
+
+**效果**：任意时刻查询任务状态，监控成功率、吞吐量、错误分布
 
 #### 基础用法
 
@@ -218,6 +238,8 @@ worker.push({'user_id': 123}, task_name='fetch_user')
 - **只缓存成功**：失败的任务不缓存，可以重新执行
 - **TTL 支持**：`dedup_ttl=None` 永久缓存，`dedup_ttl=3600` 缓存 1 小时
 
+**效果**：10000 个重复 URL，实际只爬取 1 次，节省 99.9% 计算
+
 **适用场景**：
 - 爬虫 URL 去重（避免重复爬取相同页面）
 - API 调用结果缓存（减少外部 API 请求）
@@ -240,6 +262,8 @@ async def call_api(data):
 worker = Worker(tasks=task, num_workers=50)
 worker.run()
 ```
+
+**效果**：20 个并发 workers，限流 5 tasks/s，精确控制无超限
 
 **工作原理**：
 - 基于**滑动窗口**算法：过去 1 秒内最多执行 N 个任务
