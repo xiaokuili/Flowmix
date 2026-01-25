@@ -41,6 +41,12 @@ from .limiter import ConcurrencyLimiter
 from .stats_reader import StatsReader
 from .scheduler import Scheduler
 
+# 可选：导出 providers（用于自定义后端）
+try:
+    from . import providers
+except ImportError:
+    providers = None
+
 __all__ = [
     "Task",
     "Manager",
@@ -48,6 +54,7 @@ __all__ = [
     "ConcurrencyLimiter",
     "StatsReader",
     "Scheduler",
+    "providers",
 ]
 
 __version__ = "0.5.3"

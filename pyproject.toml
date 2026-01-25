@@ -34,8 +34,10 @@ Issues = "https://github.com/xiaokuili/Flowmix/issues"
 [project.optional-dependencies]
 http = ["aiohttp>=3.8"]
 llm = ["openai>=1.0"]
-storage = ["asyncpg>=0.28"]
-all = ["aiohttp>=3.8", "openai>=1.0", "asyncpg>=0.28"]
+redis = ["redis>=5.0.0"]
+postgresql = ["asyncpg>=0.28"]
+storage = ["asyncpg>=0.28"]  # 向后兼容
+all = ["aiohttp>=3.8", "openai>=1.0", "redis>=5.0.0", "asyncpg>=0.28"]
 
 [tool.setuptools]
 packages = {find = {}}
