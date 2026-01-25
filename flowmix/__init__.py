@@ -39,6 +39,7 @@ from .manager import Manager
 from .worker import Worker
 from .limiter import ConcurrencyLimiter
 from .stats_reader import StatsReader
+from .scheduler import Scheduler
 
 __all__ = [
     "Task",
@@ -46,6 +47,7 @@ __all__ = [
     "Worker",
     "ConcurrencyLimiter",
     "StatsReader",
+    "Scheduler",
 ]
 
 __version__ = "0.5.3"
