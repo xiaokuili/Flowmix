@@ -9,8 +9,6 @@ import inspect
 import json
 from typing import Callable, Optional, Any
 
-import aiosqlite
-
 
 class Task:
     """
@@ -113,11 +111,6 @@ class Task:
         self._worker: Optional[Any] = None
         # 当前执行的消息 ID（用于自动关联 parent_id）
         self._current_msg_id: Optional[int] = None
-        # 数据库配置（由 Worker 设置）
-        self._db_path: Optional[str] = None
-        self._queue_name: Optional[str] = None
-        # 数据库连接（异步）
-        self._db: Optional[aiosqlite.Connection] = None
 
     def execute(self, func: Callable[[dict], Any]) -> Callable:
         """
@@ -307,33 +300,7 @@ class Task:
                     print(f"Warning: on_failure callback raised exception: {callback_error}")
 
             # 重新抛出原始异常
-            raise 
-
-    def set_db_config(self, db_path: str, queue_name: str):
-        """
-        设置数据库配置（由 Worker 调用）
-
-        Args:
-            db_path: 数据库文件路径
-            queue_name: 队列表名
-        """
-        self._db_path = db_path
-        self._queue_name = queue_name
-
-    async def _get_db_connection(self) -> aiosqlite.Connection:
-        """获取数据库连接（用于缓存查询）"""
-        if self._db is None:
-            if not self._db_path:
-                raise RuntimeError("Database not configured. Worker should call set_db_config().")
-
-            self._db = await aiosqlite.connect(
-                self._db_path,
-                timeout=30.0
-            )
-            self._db.row_factory = aiosqlite.Row
-            # 启用 WAL 模式
-            await self._db.execute("PRAGMA journal_mode=WAL")
-        return self._db
+            raise
 
     def _generate_fingerprint(self, data: dict) -> str:
         """
@@ -352,47 +319,6 @@ class Task:
             ensure_ascii=False
         )
         return hashlib.sha256(normalized.encode()).hexdigest()
-
-    async def check_cache(self, data: dict) -> Optional[Any]:
-        """
-        检查缓存是否命中
-
-        Args:
-            data: 任务数据
-
-        Returns:
-            缓存的结果，如果未命中返回 None
-        """
-        if not self.dedup:
-            return None
-
-        fingerprint = self._generate_fingerprint(data)
-        conn = await self._get_db_connection()
-
-        if self.dedup_ttl is None:
-            # 永久缓存：只查找 completed 的任务
-            cursor = await conn.execute(f"""
-                SELECT result FROM {self._queue_name}
-                WHERE fingerprint = ? AND status = 'completed'
-                ORDER BY completed_at DESC
-                LIMIT 1
-            """, (fingerprint,))
-        else:
-            # 带 TTL：查找最近 ttl 秒内完成的任务
-            cursor = await conn.execute(f"""
-                SELECT result FROM {self._queue_name}
-                WHERE fingerprint = ?
-                  AND status = 'completed'
-                  AND julianday('now') - completed_at < ?
-                ORDER BY completed_at DESC
-                LIMIT 1
-            """, (fingerprint, self.dedup_ttl / 86400.0))  # 转换为天数
-
-        row = await cursor.fetchone()
-        if row and row['result']:
-            return json.loads(row['result'])
-
-        return None
 
     def get_fingerprint(self, data: dict) -> Optional[str]:
         """

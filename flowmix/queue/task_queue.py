@@ -1,5 +1,5 @@
 """
-Manager - 消息队列管理器
+TaskQueue - 任务队列操作接口
 
 支持多种后端实现（SQLite、Redis、PostgreSQL）
 不依赖 Task、Worker 等任何业务概念
@@ -11,9 +11,9 @@ from typing import Optional, Dict, Any, Union
 from .providers import QueueProvider, SQLiteProvider
 
 
-class Manager:
+class TaskQueue:
     """
-    消息队列管理器
+    任务队列操作接口
 
     职责：
     - 持久化消息队列
@@ -29,31 +29,31 @@ class Manager:
 
     Example:
         # 使用默认 SQLite 后端
-        manager = Manager(
+        queue = TaskQueue(
             db_path=".flowmix/flowmix.db",
             queue_name="my-queue"
         )
 
         # 使用 Redis 后端
-        from flowmix.providers import RedisProvider
-        manager = Manager(
+        from flowmix.queue.providers import RedisProvider
+        queue = TaskQueue(
             provider=RedisProvider(redis_url="redis://localhost:6379/0")
         )
 
         # 使用 PostgreSQL 后端
-        from flowmix.providers import PostgreSQLProvider
-        manager = Manager(
+        from flowmix.queue.providers import PostgreSQLProvider
+        queue = TaskQueue(
             provider=PostgreSQLProvider(dsn="postgresql://user:pass@localhost/db")
         )
 
         # 发送消息
-        msg_id = await manager.push({"url": "http://example.com"})
+        msg_id = await queue.push({"url": "http://example.com"})
 
         # 接收消息
-        msg = await manager.pop(consumer_name="worker-1")
+        msg = await queue.pop(consumer_name="worker-1")
 
         # 确认消息
-        await manager.ack(msg["id"])
+        await queue.ack(msg["id"])
     """
 
     def __init__(
@@ -64,7 +64,7 @@ class Manager:
         timeout: float = 1.0,
     ):
         """
-        初始化 Manager
+        初始化 TaskQueue
 
         Args:
             provider: 队列提供者实例（可选）
@@ -85,7 +85,7 @@ class Manager:
             self._provider = provider
 
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"Manager initialized with provider: {self._provider.__class__.__name__}")
+        self.logger.info(f"TaskQueue initialized with provider: {self._provider.__class__.__name__}")
 
     async def push(
         self,
@@ -110,17 +110,17 @@ class Manager:
 
         Example:
             # 根任务
-            root_id = await manager.push({"url": "http://example.com"}, task_name="crawl")
+            root_id = await queue.push({"url": "http://example.com"}, task_name="crawl")
 
             # 子任务
-            child_id = await manager.push(
+            child_id = await queue.push(
                 {"url": "http://example.com/page1"},
                 parent_id=root_id,
                 task_name="crawl"
             )
 
             # 高优先级任务（DFS）
-            msg_id = await manager.push(
+            msg_id = await queue.push(
                 {"url": "http://example.com"},
                 priority=10,
                 task_name="parse"
@@ -140,7 +140,7 @@ class Manager:
             如果没有消息返回 None
 
         Example:
-            msg = await manager.pop("worker-1")
+            msg = await queue.pop("worker-1")
             if msg:
                 msg_id = msg["id"]  # 用于 ack
                 url = msg["url"]    # 业务数据
@@ -166,14 +166,14 @@ class Manager:
             fingerprint: 任务指纹（可选，用于去重缓存，只在成功时保存）
 
         Example:
-            msg = await manager.pop("worker-1")
+            msg = await queue.pop("worker-1")
             # ... 处理消息 ...
 
             # 成功
-            await manager.ack(msg["id"], result={"status": "ok"}, fingerprint="abc123...")
+            await queue.ack(msg["id"], result={"status": "ok"}, fingerprint="abc123...")
 
             # 失败（不保存 fingerprint）
-            await manager.ack(msg["id"], failed=True, error="Connection timeout")
+            await queue.ack(msg["id"], failed=True, error="Connection timeout")
         """
         await self._provider.ack(message_id, failed, error, result, fingerprint)
 

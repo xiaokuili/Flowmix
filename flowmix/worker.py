@@ -9,7 +9,8 @@ import logging
 import signal
 from typing import Optional, Dict, Any, Union
 
-from .manager import Manager
+from .queue.task_queue import TaskQueue
+from .queue.cache import Cache
 from .task import Task
 from .limiter import ConcurrencyLimiter
 
@@ -60,7 +61,7 @@ class Worker:
     def __init__(
         self,
         tasks: Union[Task, Dict[str, Task]],
-        manager: Optional[Manager] = None,
+        manager: Optional[TaskQueue] = None,
         db_path: str = ".flowmix/flowmix.db",
         queue_name: str = "tasks",
         name: Optional[str] = None,
@@ -75,7 +76,7 @@ class Worker:
             tasks: Task 实例或 Task 字典 {task_name: Task}
                   - 单个 Task: 兼容旧版本
                   - 字典: 支持多个 Task，基于 task_name 路由
-            manager: Manager 实例（可选，用于向后兼容）
+            manager: TaskQueue 实例（可选，用于向后兼容）
             db_path: SQLite 数据库文件路径（默认: .flowmix/flowmix.db）
             queue_name: 队列名称（默认: tasks）
             name: Worker 名称（默认自动生成）
@@ -91,16 +92,17 @@ class Worker:
         else:
             self.tasks = tasks
 
-        # Manager 作为内部实现（支持向后兼容）
+        # TaskQueue 作为内部实现（支持向后兼容）
         if manager is not None:
-            self._manager = manager
+            self._queue = manager
         else:
-            self._manager = Manager(db_path=db_path, queue_name=queue_name)
+            self._queue = TaskQueue(db_path=db_path, queue_name=queue_name)
 
-        # 设置 Task 的数据库配置（用于缓存功能）
+        # 初始化缓存管理器（共用数据库配置）
+        self._cache = Cache(db_path=db_path, queue_name=queue_name)
+
+        # 设置 Task 的 Worker 引用（用于 callback 立即提交任务）
         for task in self.tasks.values():
-            task.set_db_config(db_path, queue_name)
-            # 设置 Worker 引用（用于 callback 立即提交任务）
             task._worker = self
 
         self.name = name or self._generate_name()
@@ -166,7 +168,7 @@ class Worker:
         if task_name is None and len(self.tasks) == 1:
             task_name = list(self.tasks.keys())[0]
 
-        return await self._manager.push(data, priority, parent_id, task_name)
+        return await self._queue.push(data, priority, parent_id, task_name)
 
     async def run(self, auto_stop: bool = False, check_interval: float = 0.5, max_idle_time: float = 2.0):
         """
@@ -214,7 +216,7 @@ class Worker:
                 # 自动停止模式：监控队列，直到为空
                 idle_start = None
                 while self.running:
-                    pending_count = await self._manager.get_pending_count()
+                    pending_count = await self._queue.get_pending_count()
 
                     if pending_count == 0:
                         # 队列为空，开始计时
@@ -280,7 +282,7 @@ class Worker:
         while self.running and not self._stop_event.is_set():
             try:
                 # 从队列获取消息（异步调用）
-                msg = await self._manager.pop(consumer_name)
+                msg = await self._queue.pop(consumer_name)
 
                 if not msg:
                     # 检查是否需要停止
@@ -336,7 +338,7 @@ class Worker:
                 f"Message {msg_id} has no task_name. When multiple tasks are registered, "
                 f"task_name must be specified. Available tasks: {list(self.tasks.keys())}"
             )
-            await self._manager.ack(
+            await self._queue.ack(
                 msg_id,
                 True,  # failed
                 "Missing task_name field"
@@ -355,20 +357,24 @@ class Worker:
             self.logger.error(
                 f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
             )
-            await self._manager.ack(msg_id)
+            await self._queue.ack(msg_id)
             return
 
-        # ========== 缓存检查（Task 层功能） ==========
+        # ========== 缓存检查 ==========
         cached_result = None
         fingerprint = None
 
         if task.dedup:
-            # Task 检查缓存
-            cached_result = await task.check_cache(task_data)
+            # 检查缓存
+            cached_result = await self._cache.check(
+                task_name=task_name,
+                data=task_data,
+                ttl=task.dedup_ttl
+            )
 
             if cached_result is not None:
                 # 命中缓存，直接返回结果
-                fingerprint_preview = task.get_fingerprint(task_data)[:8] if task.get_fingerprint(task_data) else "unknown"
+                fingerprint_preview = self._cache.generate_fingerprint(task_name, task_data)[:8]
                 log_prefix = f"[{consumer_name}] " if consumer_name else ""
                 self.logger.info(
                     f"{log_prefix}Task '{task_name}' {msg_id} "
@@ -379,7 +385,7 @@ class Worker:
                 self.stats["success"] += 1
 
                 # 标记为 completed，使用缓存的结果
-                await self._manager.ack(
+                await self._queue.ack(
                     msg_id,
                     False,  # 未失败
                     None,   # 无错误
@@ -421,11 +427,14 @@ class Worker:
                 self.stats["processed"] += 1
                 self.stats["success"] += 1
 
-                # 获取任务指纹（由 Task 生成）
-                fingerprint = task.get_fingerprint(task_data)
+                # 生成任务指纹（用于缓存）
+                if task.dedup:
+                    fingerprint = self._cache.generate_fingerprint(task_name, task_data)
+                else:
+                    fingerprint = None
 
                 # 确认消息（标记为 completed），保存执行结果和指纹
-                await self._manager.ack(
+                await self._queue.ack(
                     msg_id,
                     False,  # 未失败
                     None,   # 无错误
@@ -468,7 +477,7 @@ class Worker:
         )
 
         # 确认消息（标记为 failed）
-        await self._manager.ack(msg_id, True, str(last_error))
+        await self._queue.ack(msg_id, True, str(last_error))
 
     def _signal_handler(self, signum, _):
         """信号处理器（优雅关闭）"""

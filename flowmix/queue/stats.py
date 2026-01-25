@@ -1,5 +1,5 @@
 """
-StatsReader - Worker 状态查询器
+Stats - Worker 状态查询器
 
 查询 Worker 的执行统计（基于 SQLite 数据库）
 支持按 worker_id、时间范围、任务类型等多维度查询
@@ -11,17 +11,17 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
-class StatsReader:
+class Stats:
     """
     Worker 状态查询器
 
     查询 Worker 的执行统计和性能指标
 
     Example:
-        from flowmix import StatsReader
+        from flowmix import Stats
         from datetime import datetime
 
-        reader = StatsReader(db_path=".flowmix/flowmix.db")
+        reader = Stats(db_path=".flowmix/flowmix.db")
 
         # 查询所有 Worker 的整体执行情况
         stats = reader.get_worker_stats()
@@ -47,7 +47,7 @@ class StatsReader:
         queue_name: str = "tasks"
     ):
         """
-        初始化 StatsReader
+        初始化 Stats
 
         Args:
             db_path: SQLite 数据库文件路径（与 Worker 使用相同路径）
