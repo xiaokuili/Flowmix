@@ -8,7 +8,11 @@ TaskQueue - 任务队列操作接口
 import logging
 from typing import Optional, Dict, Any, Union
 
-from .providers import QueueProvider, SQLiteProvider
+from .queue import QueueBackend, SQLiteQueue
+
+# 向后兼容
+QueueProvider = QueueBackend
+SQLiteProvider = SQLiteQueue
 
 
 class TaskQueue:

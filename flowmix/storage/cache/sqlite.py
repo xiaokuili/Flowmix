@@ -1,21 +1,27 @@
 """
-Cache - 任务缓存管理
+SQLiteCache - 基于 SQLite 的任务缓存管理
 
 基于任务指纹实现去重和结果缓存
 支持永久缓存和 TTL 过期缓存
 """
 
-import hashlib
 import json
 import logging
 from typing import Optional, Dict, Any
 
 import aiosqlite
 
+from .base import CacheBackend
 
-class Cache:
+
+class SQLiteCache(CacheBackend):
     """
-    任务缓存管理器
+    SQLite 缓存管理器
+
+    特点：
+    - 零外部依赖
+    - 持久化存储
+    - 适合单机部署、开发测试
 
     功能：
     - 基于任务指纹（fingerprint）实现去重
@@ -28,10 +34,10 @@ class Cache:
     - 如果设置了 TTL，只查找最近 TTL 秒内完成的任务
 
     Example:
-        from flowmix.queue import Cache
+        from flowmix.storage.cache import SQLiteCache
 
-        # 创建缓存管理器（需要数据库配置）
-        cache = Cache(db_path=".flowmix/flowmix.db", queue_name="tasks")
+        # 创建缓存管理器
+        cache = SQLiteCache(db_path=".flowmix/flowmix.db", queue_name="tasks")
 
         # 检查缓存（永久缓存）
         result = await cache.check(task_name="crawl", data={"url": "http://example.com"})
@@ -63,7 +69,7 @@ class Cache:
         self._db: Optional[aiosqlite.Connection] = None
 
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"Cache initialized: db_path={db_path}, queue_name={queue_name}")
+        self.logger.info(f"SQLiteCache initialized: db_path={db_path}, queue_name={queue_name}")
 
     async def _get_db_connection(self) -> aiosqlite.Connection:
         """获取数据库连接（用于缓存查询）"""
@@ -92,13 +98,8 @@ class Cache:
             fingerprint = cache.generate_fingerprint("crawl", {"url": "http://example.com"})
             # 返回: "a3c8f9e2..."
         """
-        # 标准化 JSON（排序 key，确保相同数据生成相同哈希）
-        normalized = json.dumps(
-            {'task': task_name, 'data': data},
-            sort_keys=True,
-            ensure_ascii=False
-        )
-        return hashlib.sha256(normalized.encode()).hexdigest()
+        # 使用默认实现
+        return self._default_fingerprint(task_name, data)
 
     async def check(
         self,
@@ -159,4 +160,4 @@ class Cache:
         if self._db is not None:
             await self._db.close()
             self._db = None
-            self.logger.info("Cache connection closed")
+            self.logger.info("SQLiteCache connection closed")

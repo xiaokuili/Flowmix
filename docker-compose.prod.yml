@@ -1,0 +1,154 @@
+# 生产环境 Docker Compose 配置
+# 使用方式: docker-compose -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # Redis 主节点
+  redis-master:
+    image: redis:7-alpine
+    container_name: flowmix-redis-master
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_master_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD:-your_strong_password}
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-your_strong_password}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - flowmix-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis 从节点（可选 - 高可用）
+  # redis-replica:
+  #   image: redis:7-alpine
+  #   container_name: flowmix-redis-replica
+  #   command: redis-server --replicaof redis-master 6379 --masterauth ${REDIS_PASSWORD:-your_strong_password} --requirepass ${REDIS_PASSWORD:-your_strong_password}
+  #   volumes:
+  #     - redis_replica_data:/data
+  #   depends_on:
+  #     - redis-master
+  #   restart: always
+  #   networks:
+  #     - flowmix-network
+
+  # PostgreSQL（生产环境推荐）
+  postgres:
+    image: postgres:15-alpine
+    container_name: flowmix-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flowmix}
+      POSTGRES_USER: ${POSTGRES_USER:-flowmix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowmix_password}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flowmix}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - flowmix-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Flowmix Worker 集群
+  flowmix-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flowmix-worker-1
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-your_strong_password}@redis-master:6379/0
+      - POSTGRES_DSN=postgresql://${POSTGRES_USER:-flowmix}:${POSTGRES_PASSWORD:-flowmix_password}@postgres/${POSTGRES_DB:-flowmix}
+      - NUM_WORKERS=4
+      - WORKER_ID=worker-1
+    volumes:
+      - ./examples:/app/examples
+      - worker_logs:/app/logs
+    restart: always
+    networks:
+      - flowmix-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 可以添加更多 worker 实现水平扩展
+  flowmix-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flowmix-worker-2
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-your_strong_password}@redis-master:6379/0
+      - POSTGRES_DSN=postgresql://${POSTGRES_USER:-flowmix}:${POSTGRES_PASSWORD:-flowmix_password}@postgres/${POSTGRES_DB:-flowmix}
+      - NUM_WORKERS=4
+      - WORKER_ID=worker-2
+    volumes:
+      - ./examples:/app/examples
+      - worker_logs:/app/logs
+    restart: always
+    networks:
+      - flowmix-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 监控工具
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: flowmix-redis-exporter
+    environment:
+      - REDIS_ADDR=redis-master:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-your_strong_password}
+    ports:
+      - "9121:9121"
+    depends_on:
+      - redis-master
+    restart: always
+    networks:
+      - flowmix-network
+
+volumes:
+  redis_master_data:
+    driver: local
+  # redis_replica_data:
+  #   driver: local
+  postgres_data:
+    driver: local
+  worker_logs:
+    driver: local
+
+networks:
+  flowmix-network:
+    driver: bridge

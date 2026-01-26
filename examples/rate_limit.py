@@ -24,44 +24,49 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="rate_limit_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="rate_limit_test")
 
-    # 创建发布器和运行器
-    pub = Pub(queue=queue)
-    runner = TaskRunner(
-        tasks={'api_call': task},
-        queue=queue,
-        cache=cache,
-        config=RunnerConfig(num_workers=20)  # 20 个并发 worker
-    )
+    try:
+        # 创建发布器和运行器
+        pub = Pub(queue=queue)
+        runner = TaskRunner(
+            tasks={'api_call': task},
+            queue=queue,
+            cache=cache,
+            config=RunnerConfig(num_workers=20)  # 20 个并发 worker
+        )
 
-    print("📋 提交 20 个任务 (限流: 每秒最多 5 个)")
-    print("=" * 50)
+        print("📋 提交 20 个任务 (限流: 每秒最多 5 个)")
+        print("=" * 50)
 
-    # 提交 20 个任务
-    for i in range(20):
-        await pub.push(data={'id': i}, task_name='api_call')
+        # 提交 20 个任务
+        for i in range(20):
+            await pub.push(data={'id': i}, task_name='api_call')
 
-    start = time.time()
-    await runner.run(auto_stop=True)
-    duration = time.time() - start
+        start = time.time()
+        await runner.run(auto_stop=True)
+        duration = time.time() - start
 
-    # 分析执行时间分布
-    print("\n📊 效果统计:")
-    print(f"  - 总任务数: 20")
-    print(f"  - 总耗时: {duration:.2f} 秒")
-    print(f"  - 限流设置: 5 tasks/s")
-    print(f"  - 理论最短耗时: {20 / 5:.1f} 秒")
+        # 分析执行时间分布
+        print("\n📊 效果统计:")
+        print(f"  - 总任务数: 20")
+        print(f"  - 总耗时: {duration:.2f} 秒")
+        print(f"  - 限流设置: 5 tasks/s")
+        print(f"  - 理论最短耗时: {20 / 5:.1f} 秒")
 
-    # 计算每秒执行数
-    if execution_times:
-        first_time = execution_times[0]
-        second_counts = {}
-        for t in execution_times:
-            second = int(t - first_time)
-            second_counts[second] = second_counts.get(second, 0) + 1
+        # 计算每秒执行数
+        if execution_times:
+            first_time = execution_times[0]
+            second_counts = {}
+            for t in execution_times:
+                second = int(t - first_time)
+                second_counts[second] = second_counts.get(second, 0) + 1
 
-        print(f"\n  每秒执行数分布:")
-        for second in sorted(second_counts.keys()):
-            print(f"    第 {second} 秒: {second_counts[second]} 个任务")
+            print(f"\n  每秒执行数分布:")
+            for second in sorted(second_counts.keys()):
+                print(f"    第 {second} 秒: {second_counts[second]} 个任务")
+    finally:
+        # 关闭数据库连接
+        await cache.close()
+        await queue.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

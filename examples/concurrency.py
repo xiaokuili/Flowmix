@@ -20,25 +20,30 @@ async def run_with_workers(num_workers, total_tasks):
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="concurrency_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="concurrency_test")
 
-    # 创建发布器和运行器
-    pub = Pub(queue=queue)
-    runner = TaskRunner(
-        tasks={'process': task},
-        queue=queue,
-        cache=cache,
-        config=RunnerConfig(num_workers=num_workers)
-    )
+    try:
+        # 创建发布器和运行器
+        pub = Pub(queue=queue)
+        runner = TaskRunner(
+            tasks={'process': task},
+            queue=queue,
+            cache=cache,
+            config=RunnerConfig(num_workers=num_workers)
+        )
 
-    # 提交任务
-    for i in range(total_tasks):
-        await pub.push(data={'id': i}, task_name='process')
+        # 提交任务
+        for i in range(total_tasks):
+            await pub.push(data={'id': i}, task_name='process')
 
-    # 计时执行
-    start = time.time()
-    await runner.run(auto_stop=True)
-    duration = time.time() - start
+        # 计时执行
+        start = time.time()
+        await runner.run(auto_stop=True)
+        duration = time.time() - start
 
-    return duration
+        return duration
+    finally:
+        # 关闭数据库连接
+        await queue.close()
+        await cache.close()
 
 async def main():
     total_tasks = 50
@@ -55,11 +60,11 @@ async def main():
         print(f"  - 总耗时: {duration:.2f} 秒")
         print(f"  - 吞吐量: {throughput:.1f} tasks/s")
 
-        if num_workers == 1:
-            baseline = duration
-        else:
-            speedup = baseline / duration
-            print(f"  - 加速比: {speedup:.1f}x")
+        # if num_workers == 1:
+        #     baseline = duration
+        # else:
+        #     speedup = baseline / duration
+        #     print(f"  - 加速比: {speedup:.1f}x")
 
 if __name__ == "__main__":
     asyncio.run(main())

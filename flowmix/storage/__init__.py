@@ -1,24 +1,52 @@
 """
-Queue - 队列相关模块
+Storage - 存储相关模块
 
 包含任务队列、缓存、统计和后端实现
 """
 
 from .task_queue import TaskQueue
-from .cache import Cache
 from .stats import Stats
-from .providers import (
-    QueueProvider,
+
+# 缓存模块
+from .cache import (
+    CacheBackend,
+    CacheProvider,  # 向后兼容
+    SQLiteCache,
+    RedisCache,
+    Cache,  # 向后兼容
+)
+
+# 队列模块
+from .queue import (
+    QueueBackend,
+    QueueProvider,  # 向后兼容
+    SQLiteQueue,
+    RedisQueue,
+    PostgreSQLQueue,
+    # 向后兼容
     SQLiteProvider,
     RedisProvider,
-    PostgreSQLProvider
+    PostgreSQLProvider,
 )
 
 __all__ = [
+    # 队列
     'TaskQueue',
-    'Cache',
+    # 统计
     'Stats',
-    'QueueProvider',
+    # 缓存
+    'CacheBackend',
+    'CacheProvider',  # 向后兼容
+    'SQLiteCache',
+    'RedisCache',
+    'Cache',  # 向后兼容
+    # 队列
+    'QueueBackend',
+    'QueueProvider',  # 向后兼容
+    'SQLiteQueue',
+    'RedisQueue',
+    'PostgreSQLQueue',
+    # 向后兼容
     'SQLiteProvider',
     'RedisProvider',
     'PostgreSQLProvider',

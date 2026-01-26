@@ -9,10 +9,13 @@ import os
 import shutil
 
 examples = [
-    ('dedup.py', '任务去重效果'),
-    ('concurrency.py', '高性能并发效果'),
-    ('rate_limit.py', '并发限流效果'),
-    ('stats.py', 'Worker 状态查询'),
+    ('dedup.py', '避免重复处理'),
+    ('concurrency.py', '控制并发速率 - 并发数控制'),
+    ('rate_limit.py', '控制并发速率 - 任务级限流'),
+    ('task_dependency.py', '任务依赖 - 构建任务树'),
+    ('deployment.py', '灵活部署环境 - 多种存储后端'),
+    ('stats.py', '状态查询 - 实时统计'),
+    ('monitoring.py', '监控告警 - 告警规则'),
 ]
 
 def clean_db():

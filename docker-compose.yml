@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # Redis 服务 - 任务队列和缓存存储
+  redis:
+    image: redis:7-alpine
+    container_name: flowmix-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - flowmix-network
+
+  # PostgreSQL 服务（可选）
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: flowmix-postgres
+  #   environment:
+  #     POSTGRES_DB: flowmix
+  #     POSTGRES_USER: flowmix
+  #     POSTGRES_PASSWORD: flowmix_password
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U flowmix"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
+  #   networks:
+  #     - flowmix-network
+
+  # Flowmix Worker 服务（可选 - 用于独立部署 worker）
+  # flowmix-worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: flowmix-worker
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - NUM_WORKERS=3
+  #   volumes:
+  #     - ./examples:/app/examples
+  #     - ./flowmix:/app/flowmix
+  #   command: python examples/deployment.py
+  #   restart: unless-stopped
+  #   networks:
+  #     - flowmix-network
+
+  # Redis Commander - Web UI 管理工具（可选）
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: flowmix-redis-ui
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - flowmix-network
+
+volumes:
+  redis_data:
+    driver: local
+  # postgres_data:
+  #   driver: local
+
+networks:
+  flowmix-network:
+    driver: bridge

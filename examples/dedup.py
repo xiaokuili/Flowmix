@@ -1,10 +1,21 @@
 """
-任务去重示例
+任务去重示例（基于 Redis）
 
 演示：提交重复任务时，只执行一次，其余命中缓存
+
+特点：
+- 使用 Redis 作为队列和缓存后端
+- 支持高并发场景
+- 分布式部署友好
+
+运行前需要：
+1. 启动 Redis 服务: redis-server
+2. 安装依赖: pip install redis
 """
 import asyncio
-from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig
+from flowmix.storage.providers import RedisProvider
+from flowmix.storage.redis_cache import RedisCache
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)
@@ -25,9 +36,18 @@ async def on_success(data, result):
     print(f"  → 任务完成: {data['url']}, 返回 {len(str(result))} 字节")
 
 async def main():
-    # 初始化队列和缓存
-    queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="dedup_test")
-    cache = Cache(db_path=".flowmix/flowmix.db", queue_name="dedup_test")
+    # Redis 连接配置
+    redis_url = "redis://localhost:6379/0"
+    queue_name = "dedup_test"
+
+    # 初始化 Redis 队列和缓存
+    queue = TaskQueue(
+        provider=RedisProvider(
+            redis_url=redis_url,
+            queue_name=queue_name
+        )
+    )
+    cache = RedisCache(redis_url=redis_url, queue_name=queue_name)
 
     # 创建发布器和运行器
     pub = Pub(queue=queue)
@@ -39,6 +59,7 @@ async def main():
     )
 
     print("📋 提交 10 个任务 (5 个唯一 URL，每个重复 2 次)")
+    print(f"   后端: Redis ({redis_url})")
     print("-" * 50)
 
     urls = [
@@ -61,6 +82,10 @@ async def main():
     print(f"  - 实际执行数: {execute_count}")
     print(f"  - 缓存命中数: {10 - execute_count}")
     print(f"  - 节省计算: {(10 - execute_count) / 10 * 100:.1f}%")
+
+    # 清理资源
+    await cache.close()
+    await queue.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

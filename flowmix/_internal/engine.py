@@ -37,7 +37,8 @@ class TaskEngine:
         limiter: ConcurrencyLimiter,
         queue: TaskQueue,
         max_retries: int = 0,
-        retry_delay: float = 0
+        retry_delay: float = 0,
+        stop_event: Optional[asyncio.Event] = None
     ):
         """
         初始化 TaskEngine
@@ -48,12 +49,14 @@ class TaskEngine:
             queue: 队列实例
             max_retries: 最大重试次数
             retry_delay: 重试延迟（秒）
+            stop_event: 停止事件（用于取消任务）
         """
         self._cache = cache
         self._limiter = limiter
         self._queue = queue
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self._stop_event = stop_event
         self.logger = logging.getLogger(__name__)
 
     async def execute(
@@ -112,8 +115,32 @@ class TaskEngine:
                     await self._limiter.acquire(task_name, task.concurrency_limit)
 
                 try:
-                    # 执行任务
-                    result = await task.run(task_data, msg_id=msg_id)
+                    # 执行任务（支持取消）
+                    if self._stop_event:
+                        # 创建任务并等待完成或停止信号
+                        task_future = asyncio.create_task(task.run(task_data, msg_id=msg_id))
+                        stop_task = asyncio.create_task(self._stop_event.wait())
+
+                        done, pending = await asyncio.wait(
+                            {task_future, stop_task},
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+
+                        # 取消未完成的任务
+                        for p in pending:
+                            p.cancel()
+
+                        # 检查是哪个任务完成了
+                        if task_future in done:
+                            # 任务正常完成
+                            result = task_future.result()
+                        else:
+                            # 停止信号到达，任务被取消
+                            self.logger.warning(f"[{worker_name}] Task '{task_name}' {msg_id} cancelled due to shutdown")
+                            raise asyncio.CancelledError("Task cancelled due to shutdown")
+                    else:
+                        # 没有停止事件，正常执行
+                        result = await task.run(task_data, msg_id=msg_id)
 
                     # 生成指纹（用于去重）
                     fingerprint = None

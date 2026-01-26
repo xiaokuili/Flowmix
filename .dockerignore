@@ -1,0 +1,70 @@
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Claude
+.claude/
+
+# Flowmix 数据
+.flowmix/
+*.db
+*.db-journal
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# 文档
+*.md
+docs/
+
+# CI/CD
+.github/
+
+# 其他
+*.log
+*.sqlite

@@ -101,13 +101,8 @@ class TaskRunner:
 
         # 核心组件
         self._limiter = ConcurrencyLimiter()
-        self._engine = TaskEngine(
-            cache=cache,
-            limiter=self._limiter,
-            queue=queue,
-            max_retries=self.config.max_retries,
-            retry_delay=self.config.retry_delay
-        )
+        # TaskEngine 将在 run() 时设置 stop_event
+        self._engine = None
 
         # 设置 Task 的 producer 引用（用于 callback 中提交新任务）
         self._setup_task_callbacks()
@@ -124,6 +119,8 @@ class TaskRunner:
         # 控制标志
         self.running = False
         self._stop_event = None
+        self._workers = []  # 保存 worker 任务引用
+        self._shutdown_count = 0  # 关闭信号计数
 
         self.logger = logging.getLogger(__name__)
         self.logger.info(
@@ -176,6 +173,16 @@ class TaskRunner:
         self.running = True
         self._stop_event = asyncio.Event()
 
+        # 初始化 TaskEngine（传入 stop_event）
+        self._engine = TaskEngine(
+            cache=self._cache,
+            limiter=self._limiter,
+            queue=self._queue,
+            max_retries=self.config.max_retries,
+            retry_delay=self.config.retry_delay,
+            stop_event=self._stop_event
+        )
+
         # 注册信号处理
         try:
             signal.signal(signal.SIGINT, self._signal_handler)
@@ -186,7 +193,7 @@ class TaskRunner:
         self.logger.info(f"TaskRunner {self.name} started with {self.num_workers} concurrent workers")
 
         # 创建 worker 协程
-        workers = [
+        self._workers = [
             asyncio.create_task(self._worker_loop(i))
             for i in range(self.num_workers)
         ]
@@ -218,20 +225,20 @@ class TaskRunner:
                 # 停止所有 worker
                 self.running = False
                 self._stop_event.set()
-                for w in workers:
+                for w in self._workers:
                     w.cancel()
-                await asyncio.gather(*workers, return_exceptions=True)
+                await asyncio.gather(*self._workers, return_exceptions=True)
             else:
                 # 持续运行模式：等待所有 worker 协程完成（通常是收到停止信号后）
-                await asyncio.gather(*workers, return_exceptions=True)
+                await asyncio.gather(*self._workers, return_exceptions=True)
 
         except Exception as e:
             self.logger.error(f"TaskRunner error: {e}", exc_info=True)
             self.running = False
             self._stop_event.set()
-            for w in workers:
+            for w in self._workers:
                 w.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
+            await asyncio.gather(*self._workers, return_exceptions=True)
             raise
         finally:
             self._cleanup()
@@ -243,8 +250,17 @@ class TaskRunner:
 
         while self.running and not self._stop_event.is_set():
             try:
-                # 从队列获取消息
-                msg = await self._queue.pop(worker_name)
+                # 从队列获取消息（使用 asyncio.wait_for 让它可以被中断）
+                try:
+                    msg = await asyncio.wait_for(
+                        self._queue.pop(worker_name),
+                        timeout=0.5  # 500ms 超时，让停止信号能及时响应
+                    )
+                except asyncio.TimeoutError:
+                    # 超时后检查停止信号
+                    if self._stop_event.is_set():
+                        break
+                    continue
 
                 if not msg:
                     # 检查是否需要停止
@@ -321,11 +337,25 @@ class TaskRunner:
         )
 
     def _signal_handler(self, signum, _):
-        """信号处理器（优雅关闭）"""
-        self.logger.info(f"Received signal {signum}, shutting down...")
-        self.running = False
-        if self._stop_event:
-            self._stop_event.set()
+        """信号处理器（两级关闭机制）"""
+        self._shutdown_count += 1
+
+        if self._shutdown_count == 1:
+            # 第一次 Ctrl+C：优雅关闭
+            self.logger.info(f"Received signal {signum}, gracefully shutting down...")
+            self.logger.info("Press Ctrl+C again to force quit immediately")
+            self.running = False
+            if self._stop_event:
+                self._stop_event.set()
+        else:
+            # 第二次 Ctrl+C：强制关闭
+            self.logger.warning("Force shutdown requested, cancelling all workers...")
+            for w in self._workers:
+                if not w.done():
+                    w.cancel()
+            # 直接退出
+            import sys
+            sys.exit(1)
 
     def _cleanup(self):
         """清理资源"""
