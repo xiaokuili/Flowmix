@@ -5,7 +5,7 @@
 """
 import asyncio
 import time
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 task = Task(name='process')
 
@@ -20,8 +20,8 @@ async def run_with_workers(num_workers, total_tasks):
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="concurrency_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="concurrency_test")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'process': task},
         queue=queue,
@@ -31,7 +31,7 @@ async def run_with_workers(num_workers, total_tasks):
 
     # 提交任务
     for i in range(total_tasks):
-        await producer.push(data={'id': i}, task_name='process')
+        await pub.push(data={'id': i}, task_name='process')
 
     # 计时执行
     start = time.time()

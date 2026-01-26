@@ -4,11 +4,11 @@ Flowmix - 简洁灵活的任务队列框架
 核心组件：
 - Task: 任务对象（数据 + 执行策略）
 - TaskQueue: 队列管理器（存取任务，支持 SQLite/Redis/PostgreSQL）
-- TaskProducer: 任务提交器（提交任务到队列）
+- Pub: 任务发布器（提交任务到队列）
 - TaskConsumer: 任务消费器（从队列拉取并执行任务）
 
 Example:
-    from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+    from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
     # 1. 定义 Task
     task = Task(name='process')
@@ -22,9 +22,9 @@ Example:
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 3. 提交任务（生产者）
-    producer = TaskProducer(queue=queue)
-    await producer.push(data={"url": "http://example.com"}, task_name="process")
+    # 3. 提交任务（发布器）
+    pub = Pub(queue=queue)
+    await pub.push(data={"url": "http://example.com"}, task_name="process")
 
     # 4. 执行任务（消费者）
     consumer = TaskConsumer(
@@ -37,7 +37,7 @@ Example:
 """
 
 from .task import Task
-from .producer import TaskProducer
+from .pub import Pub
 from .consumer import TaskConsumer, ConsumerConfig
 from .limiter import ConcurrencyLimiter
 from .scheduler import Scheduler
@@ -48,6 +48,7 @@ from .queue import TaskQueue, Cache, Stats
 # 向后兼容（旧 API）
 Manager = TaskQueue  # Manager 重命名为 TaskQueue
 StatsReader = Stats  # StatsReader 重命名为 Stats
+TaskProducer = Pub  # TaskProducer 重命名为 Pub
 
 # 可选：导出 queue 包（用于自定义后端）
 try:
@@ -58,7 +59,7 @@ except ImportError:
 __all__ = [
     # 核心 API
     "Task",
-    "TaskProducer",
+    "Pub",
     "TaskConsumer",
     "ConsumerConfig",
     "TaskQueue",
@@ -73,6 +74,7 @@ __all__ = [
     # 向后兼容
     "Manager",
     "StatsReader",
+    "TaskProducer",
 ]
 
 __version__ = "0.5.3"

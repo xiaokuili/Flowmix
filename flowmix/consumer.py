@@ -20,8 +20,8 @@ from .task import Task
 from .queue.task_queue import TaskQueue
 from .queue.cache import Cache
 from .limiter import ConcurrencyLimiter
-from .executor import TaskExecutor
-from .producer import TaskProducer
+from .engine import TaskEngine
+from .pub import Pub
 
 
 @dataclass
@@ -101,7 +101,7 @@ class TaskConsumer:
 
         # 核心组件
         self._limiter = ConcurrencyLimiter()
-        self._executor = TaskExecutor(
+        self._executor = TaskEngine(
             cache=cache,
             limiter=self._limiter,
             queue=queue,
@@ -143,7 +143,7 @@ class TaskConsumer:
 
     def _setup_task_callbacks(self):
         """为每个 Task 设置回调中使用的 producer"""
-        producer = TaskProducer(self._queue)
+        producer = Pub(self._queue)
         for task in self.tasks.values():
             task._producer = producer
 
@@ -299,7 +299,7 @@ class TaskConsumer:
             )
             return
 
-        # 2. 执行任务（委托给 TaskExecutor）
+        # 2. 执行任务（委托给 TaskEngine）
         result, status = await self._executor.execute(msg, task, worker_name)
 
         # 3. 更新统计

@@ -1,5 +1,5 @@
 """
-TaskExecutor - 任务执行器
+TaskEngine - 任务执行引擎
 
 职责：
 - 缓存检查
@@ -18,9 +18,9 @@ from .limiter import ConcurrencyLimiter
 from .queue.task_queue import TaskQueue
 
 
-class TaskExecutor:
+class TaskEngine:
     """
-    任务执行器
+    任务执行引擎
 
     职责：
     - 缓存检查（如果 Task 启用了 dedup）
@@ -40,7 +40,7 @@ class TaskExecutor:
         retry_delay: float = 0
     ):
         """
-        初始化 TaskExecutor
+        初始化 TaskEngine
 
         Args:
             cache: 缓存实例

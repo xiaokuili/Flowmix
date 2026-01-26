@@ -27,7 +27,7 @@ pip install --force-reinstall git+https://github.com/xiaokuili/Flowmix.git@v0.5.
 ## 🚀 快速开始
 
 ```python
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 # 定义任务
 task = Task(name='process')
@@ -47,9 +47,9 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建生产者（提交任务）
-    producer = TaskProducer(queue=queue)
-    await producer.push(data={"url": "http://example.com"}, task_name='process')
+    # 创建发布器（提交任务）
+    pub = Pub(queue=queue)
+    await pub.push(data={"url": "http://example.com"}, task_name='process')
 
     # 创建消费者（执行任务）
     consumer = TaskConsumer(
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 ```python
 import asyncio
 import time
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 task = Task(name='process')
 
@@ -93,8 +93,8 @@ async def run_with_workers(num_workers, total_tasks):
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'process': task},
         queue=queue,
@@ -104,7 +104,7 @@ async def run_with_workers(num_workers, total_tasks):
 
     # 提交任务
     for i in range(total_tasks):
-        await producer.push(data={'id': i}, task_name='process')
+        await pub.push(data={'id': i}, task_name='process')
 
     # 计时执行
     start = time.time()
@@ -161,7 +161,7 @@ python examples/concurrency.py
 
 ```python
 import asyncio
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)
@@ -186,8 +186,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'fetch': task},
         queue=queue,
@@ -207,7 +207,7 @@ async def main():
 
     # 每个 URL 提交 2 次
     for url in urls * 2:
-        await producer.push(data={'url': url}, task_name='fetch')
+        await pub.push(data={'url': url}, task_name='fetch')
 
     await consumer.run(auto_stop=True)
 
@@ -249,7 +249,7 @@ python examples/dedup.py
 ```python
 import asyncio
 import time
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 # 创建带限流的任务（每秒最多 5 个）
 task = Task(name='api_call', concurrency_limit=5)
@@ -268,8 +268,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'api_call': task},
         queue=queue,
@@ -281,7 +281,7 @@ async def main():
 
     # 提交 20 个任务
     for i in range(20):
-        await producer.push(data={'id': i}, task_name='api_call')
+        await pub.push(data={'id': i}, task_name='api_call')
 
     start = time.time()
     await consumer.run(auto_stop=True)
@@ -338,7 +338,7 @@ python examples/rate_limit.py
 
 ```python
 import asyncio
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache, Stats
 
 task = Task(name='process')
 
@@ -355,8 +355,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'process': task},
         queue=queue,
@@ -368,7 +368,7 @@ async def main():
 
     # 提交任务
     for i in range(50):
-        await producer.push(data={'id': i}, task_name='process')
+        await pub.push(data={'id': i}, task_name='process')
 
     # 执行任务
     await consumer.run(auto_stop=True)

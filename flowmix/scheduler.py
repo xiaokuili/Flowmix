@@ -96,7 +96,7 @@ class Scheduler:
     - 自动提交任务到队列
 
     Example:
-        from flowmix import Task, TaskQueue, TaskProducer, Scheduler
+        from flowmix import Task, TaskQueue, Pub, Scheduler
         import asyncio
 
         # 定义任务
@@ -109,10 +109,10 @@ class Scheduler:
 
         # 初始化队列
         queue = TaskQueue(db_path=".flowmix/flowmix.db")
-        producer = TaskProducer(queue=queue)
+        pub = Pub(queue=queue)
 
         # 创建调度器
-        scheduler = Scheduler(producer)
+        scheduler = Scheduler(pub)
 
         # 添加定时任务
         scheduler.add_cron(
@@ -156,7 +156,7 @@ class Scheduler:
         初始化调度器
 
         Args:
-            producer: TaskProducer 实例（用于提交任务）
+            producer: Pub 实例（用于提交任务）
             check_interval: 检查间隔（秒，默认 30 秒）
         """
         if not CRONITER_AVAILABLE:

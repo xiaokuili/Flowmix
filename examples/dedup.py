@@ -4,7 +4,7 @@
 演示：提交重复任务时，只执行一次，其余命中缓存
 """
 import asyncio
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)
@@ -29,8 +29,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="dedup_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="dedup_test")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'fetch': task},
         queue=queue,
@@ -51,7 +51,7 @@ async def main():
 
     # 每个 URL 提交 2 次
     for url in urls * 2:
-        await producer.push(data={'url': url}, task_name='fetch')
+        await pub.push(data={'url': url}, task_name='fetch')
 
     await consumer.run(auto_stop=True)
 

@@ -1,5 +1,5 @@
 """
-TaskProducer - 任务提交器
+Pub - 任务发布器
 
 职责：
 - 提交任务到队列
@@ -12,9 +12,9 @@ from typing import Dict, Any, Optional
 from .queue.task_queue import TaskQueue
 
 
-class TaskProducer:
+class Pub:
     """
-    任务提交器
+    任务发布器
 
     职责：
     - 提交任务到队列
@@ -23,23 +23,23 @@ class TaskProducer:
     Example:
         # 初始化
         queue = TaskQueue(db_path=".flowmix/flowmix.db")
-        producer = TaskProducer(queue=queue)
+        pub = Pub(queue=queue)
 
         # 提交任务
-        task_id = await producer.push(
+        task_id = await pub.push(
             data={"url": "http://example.com"},
             task_name="crawl",
             priority=10
         )
 
         # 查询状态
-        info = await producer.get_task_info(task_id)
-        stats = await producer.get_tree_stats(task_id)
+        info = await pub.get_task_info(task_id)
+        stats = await pub.get_tree_stats(task_id)
     """
 
     def __init__(self, queue: TaskQueue):
         """
-        初始化 TaskProducer
+        初始化 Pub
 
         Args:
             queue: TaskQueue 实例（可以是 SQLite/Redis/PostgreSQL 后端）
@@ -68,13 +68,13 @@ class TaskProducer:
 
         Example:
             # 提交根任务
-            root_id = await producer.push(
+            root_id = await pub.push(
                 data={"url": "http://example.com"},
                 task_name="crawl"
             )
 
             # 提交子任务
-            child_id = await producer.push(
+            child_id = await pub.push(
                 data={"url": "http://example.com/page1"},
                 task_name="crawl",
                 parent_id=root_id

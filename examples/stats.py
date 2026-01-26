@@ -4,7 +4,7 @@
 演示：实时查询 Consumer 的执行情况
 """
 import asyncio
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache, Stats
 
 task = Task(name='process')
 
@@ -21,8 +21,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="stats_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="stats_test")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'process': task},
         queue=queue,
@@ -35,7 +35,7 @@ async def main():
 
     # 提交任务
     for i in range(50):
-        await producer.push(data={'id': i}, task_name='process')
+        await pub.push(data={'id': i}, task_name='process')
 
     # 执行任务
     await consumer.run(auto_stop=True)

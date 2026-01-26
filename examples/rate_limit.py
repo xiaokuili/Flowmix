@@ -5,7 +5,7 @@
 """
 import asyncio
 import time
-from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
 
 # 创建带限流的任务（每秒最多 5 个）
 task = Task(name='api_call', concurrency_limit=5)
@@ -24,8 +24,8 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="rate_limit_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="rate_limit_test")
 
-    # 创建生产者和消费者
-    producer = TaskProducer(queue=queue)
+    # 创建发布器和消费者
+    pub = Pub(queue=queue)
     consumer = TaskConsumer(
         tasks={'api_call': task},
         queue=queue,
@@ -38,7 +38,7 @@ async def main():
 
     # 提交 20 个任务
     for i in range(20):
-        await producer.push(data={'id': i}, task_name='api_call')
+        await pub.push(data={'id': i}, task_name='api_call')
 
     start = time.time()
     await consumer.run(auto_stop=True)
