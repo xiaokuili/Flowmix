@@ -55,7 +55,7 @@ async def main():
         tasks={'crawl': crawl_task},
         queue=queue,
         cache=cache,
-        config=RunnerConfig(num_workers=5)
+        config=RunnerConfig(num_workers=1)
     )
     await runner.run(auto_stop=True)
 

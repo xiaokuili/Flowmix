@@ -210,3 +210,48 @@ class TaskQueue:
     async def close(self):
         """关闭连接"""
         await self._provider.close()
+
+    async def get_task_info(self, task_id: int) -> Dict[str, Any]:
+        """
+        查询任务信息
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            任务信息字典，包含：
+            - id: 任务 ID
+            - status: 任务状态（pending/processing/completed/failed）
+            - data: 任务数据
+            - result: 执行结果
+            - error: 错误信息
+            - created_at: 创建时间
+            - updated_at: 更新时间
+            等
+
+        Example:
+            info = await queue.get_task_info(task_id)
+            print(f"Status: {info['status']}")
+        """
+        return await self._provider.get_task_info(task_id)
+
+    async def get_tree_stats(self, root_id: int) -> Dict[str, Any]:
+        """
+        查询任务树统计信息
+
+        Args:
+            root_id: 根任务 ID
+
+        Returns:
+            统计字典，包含：
+            - total: 总任务数
+            - pending: 待处理任务数
+            - processing: 处理中任务数
+            - completed: 已完成任务数
+            - failed: 失败任务数
+
+        Example:
+            stats = await queue.get_tree_stats(root_id)
+            print(f"Total: {stats['total']}, Completed: {stats['completed']}")
+        """
+        return await self._provider.get_tree_stats(root_id)

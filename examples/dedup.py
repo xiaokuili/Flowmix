@@ -14,8 +14,9 @@
 """
 import asyncio
 from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig
-from flowmix.storage.providers import RedisProvider
-from flowmix.storage.redis_cache import RedisCache
+from flowmix.storage.queue import RedisProvider
+from flowmix.storage.cache import RedisCache
+
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)

@@ -10,6 +10,8 @@ TaskEngine - 任务执行引擎
 
 import asyncio
 import logging
+import traceback
+import os
 from typing import Dict, Any, Tuple, Optional
 
 from ..task import Task
@@ -157,13 +159,17 @@ class TaskEngine:
 
             except Exception as e:
                 last_error = e
-                self.logger.error(
-                    f"Task '{task_name}' {msg_id} failed (attempt {attempt + 1}): {e}",
-                    exc_info=True
-                )
+
+                # 提取用户代码的错误位置（跳过框架内部的调用栈）
+                error_location = self._extract_user_error_location(e)
 
                 # 判断是否需要重试
                 if attempt < self.max_retries:
+                    self.logger.warning(
+                        f"Task '{task_name}' {msg_id} failed (attempt {attempt + 1}/{self.max_retries + 1}): "
+                        f"{type(e).__name__}: {e}"
+                        f"{error_location}"
+                    )
                     if self.retry_delay > 0:
                         self.logger.info(
                             f"Retrying task '{task_name}' {msg_id} in {self.retry_delay}s..."
@@ -172,12 +178,49 @@ class TaskEngine:
                 else:
                     # 达到最大重试次数
                     self.logger.error(
-                        f"Task '{task_name}' {msg_id} permanently failed after {self.max_retries} retries: {last_error}"
+                        f"Task '{task_name}' {msg_id} permanently failed after {self.max_retries} retries: "
+                        f"{type(e).__name__}: {e}"
+                        f"{error_location}"
                     )
                     return {"error": str(last_error)}, "failed"
 
         # 不应该到达这里
         return {"error": "Unknown error"}, "failed"
+
+    def _extract_user_error_location(self, exception: Exception) -> str:
+        """
+        提取用户代码中的错误位置（跳过框架内部调用栈）
+
+        Args:
+            exception: 异常对象
+
+        Returns:
+            错误位置字符串，例如 " at examples/stats.py:16"
+        """
+        tb = traceback.extract_tb(exception.__traceback__)
+
+        # 从后往前找，跳过 flowmix 框架内部的路径
+        for frame in reversed(tb):
+            # 如果不是 flowmix 内部文件，就是用户代码
+            if 'flowmix' not in frame.filename or 'examples' in frame.filename:
+                # 转换为相对路径
+                try:
+                    rel_path = os.path.relpath(frame.filename)
+                except ValueError:
+                    # 如果无法转换（不同驱动器等），使用原路径
+                    rel_path = frame.filename
+                return f" at {rel_path}:{frame.lineno}"
+
+        # 如果都是框架内部调用，返回最后一个
+        if tb:
+            last_frame = tb[-1]
+            try:
+                rel_path = os.path.relpath(last_frame.filename)
+            except ValueError:
+                rel_path = last_frame.filename
+            return f" at {rel_path}:{last_frame.lineno}"
+
+        return ""
 
     async def _check_cache(
         self,
