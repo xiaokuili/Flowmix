@@ -257,7 +257,7 @@ class SQLiteProvider(QueueProvider):
                 if row:
                     msg_id, data_json, task_name = row['id'], row['data'], row['task_name']
                     data = json.loads(data_json)
-                    result = {"id": msg_id, "task_name": task_name, **data}
+                    result = {"id": msg_id, "task_name": task_name, "data": data}
                     self.logger.debug(f"Popped message {msg_id} (task_name={task_name})")
                     return result
                 else:

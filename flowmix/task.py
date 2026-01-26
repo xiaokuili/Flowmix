@@ -107,8 +107,8 @@ class Task:
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
-        # Worker 引用（由 Worker 设置，用于 callback 立即提交任务）
-        self._worker: Optional[Any] = None
+        # Producer 引用（由 Consumer 设置，用于 callback 立即提交任务）
+        self._producer: Optional[Any] = None
         # 当前执行的消息 ID（用于自动关联 parent_id）
         self._current_msg_id: Optional[int] = None
 
@@ -233,15 +233,15 @@ class Task:
             # 在外部使用
             await task.callback('crawl', {'url': 'http://example.com'})
         """
-        if not self._worker:
+        if not self._producer:
             raise RuntimeError(
-                f"Task '{self.name}' is not attached to a Worker. "
-                "Please create a Worker instance with this task first."
+                f"Task '{self.name}' is not attached to a Consumer. "
+                "Please create a TaskConsumer instance with this task first."
             )
 
         # 立即提交到队列（如果在 execute 中，自动关联父任务）
         parent_id = self._current_msg_id
-        await self._worker.push(data, priority, parent_id, task_name)
+        await self._producer.push(data=data, task_name=task_name, priority=priority, parent_id=parent_id)
 
     async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """
