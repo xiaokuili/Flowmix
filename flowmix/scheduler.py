@@ -32,7 +32,7 @@ class ScheduledTask:
 
         Args:
             cron: Cron 表达式（如 "0 8 * * *" 表示每天 8 点）
-            task_name: 任务名称（对应 Worker 中的 Task）
+            task_name: 任务名称（对应 Consumer 中的 Task）
             data: 任务数据
             priority: 优先级（默认 0）
             enabled: 是否启用（默认 True）
@@ -93,10 +93,11 @@ class Scheduler:
     职责：
     - 管理调度任务列表
     - 定时检查并触发任务
-    - 自动提交任务到 Worker 队列
+    - 自动提交任务到队列
 
     Example:
-        from flowmix import Worker, Task, Scheduler
+        from flowmix import Task, TaskQueue, TaskProducer, Scheduler
+        import asyncio
 
         # 定义任务
         task = Task(name='daily_report')
@@ -106,11 +107,12 @@ class Scheduler:
             print(f"执行每日报表: {data}")
             return "done"
 
-        # 创建 Worker
-        worker = Worker(tasks=task, num_workers=3)
+        # 初始化队列
+        queue = TaskQueue(db_path=".flowmix/flowmix.db")
+        producer = TaskProducer(queue=queue)
 
         # 创建调度器
-        scheduler = Scheduler(worker)
+        scheduler = Scheduler(producer)
 
         # 添加定时任务
         scheduler.add_cron(
@@ -125,12 +127,8 @@ class Scheduler:
             data={'endpoint': '/api/health'}
         )
 
-        # 同时运行调度器和 Worker
-        import asyncio
-        await asyncio.gather(
-            scheduler.run(),
-            worker.run()
-        )
+        # 运行调度器
+        await scheduler.run()
 
     Cron 表达式格式：
         * * * * *
@@ -151,14 +149,14 @@ class Scheduler:
 
     def __init__(
         self,
-        worker: Any,
+        producer: Any,
         check_interval: float = 30.0
     ):
         """
         初始化调度器
 
         Args:
-            worker: Worker 实例（用于提交任务）
+            producer: TaskProducer 实例（用于提交任务）
             check_interval: 检查间隔（秒，默认 30 秒）
         """
         if not CRONITER_AVAILABLE:
@@ -167,7 +165,7 @@ class Scheduler:
                 "Install it with: pip install croniter"
             )
 
-        self.worker = worker
+        self.producer = producer
         self.check_interval = check_interval
         self.tasks: List[ScheduledTask] = []
         self.running = False
@@ -265,8 +263,8 @@ class Scheduler:
                         )
 
                         try:
-                            # 提交任务到 Worker 队列
-                            await self.worker.push(
+                            # 提交任务到队列
+                            await self.producer.push(
                                 data=task.data,
                                 priority=task.priority,
                                 task_name=task.task_name

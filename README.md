@@ -161,7 +161,7 @@ python examples/concurrency.py
 
 ```python
 import asyncio
-from flowmix import Task, Worker
+from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)
@@ -182,7 +182,18 @@ async def on_success(data, result):
     print(f"  → 任务完成: {data['url']}, 返回 {len(str(result))} 字节")
 
 async def main():
-    worker = Worker(tasks=task, num_workers=3)
+    # 初始化队列和缓存
+    queue = TaskQueue(db_path=".flowmix/flowmix.db")
+    cache = Cache(db_path=".flowmix/flowmix.db")
+
+    # 创建生产者和消费者
+    producer = TaskProducer(queue=queue)
+    consumer = TaskConsumer(
+        tasks={'fetch': task},
+        queue=queue,
+        cache=cache,
+        config=ConsumerConfig(num_workers=3)
+    )
 
     print("📋 提交 10 个任务 (5 个唯一 URL，每个重复 2 次)")
 
@@ -196,9 +207,9 @@ async def main():
 
     # 每个 URL 提交 2 次
     for url in urls * 2:
-        await worker.push({'url': url}, task_name='fetch')
+        await producer.push(data={'url': url}, task_name='fetch')
 
-    await worker.run(auto_stop=True)
+    await consumer.run(auto_stop=True)
 
     print(f"\n📊 效果统计:")
     print(f"  - 提交任务数: 10")
@@ -231,14 +242,14 @@ python examples/dedup.py
 
 ### 3. 并发限流
 
-精确控制每秒最大并发数，即使有多个 Worker 也能严格限流。
+精确控制每秒最大并发数，即使有多个并发工作器也能严格限流。
 
 **示例代码**：[examples/rate_limit.py](examples/rate_limit.py)
 
 ```python
 import asyncio
 import time
-from flowmix import Task, Worker
+from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache
 
 # 创建带限流的任务（每秒最多 5 个）
 task = Task(name='api_call', concurrency_limit=5)
@@ -253,16 +264,27 @@ async def api_call(data):
     return {"id": data['id']}
 
 async def main():
-    worker = Worker(tasks=task, num_workers=20)  # 20 个并发 worker
+    # 初始化队列和缓存
+    queue = TaskQueue(db_path=".flowmix/flowmix.db")
+    cache = Cache(db_path=".flowmix/flowmix.db")
+
+    # 创建生产者和消费者
+    producer = TaskProducer(queue=queue)
+    consumer = TaskConsumer(
+        tasks={'api_call': task},
+        queue=queue,
+        cache=cache,
+        config=ConsumerConfig(num_workers=20)  # 20 个并发 worker
+    )
 
     print("📋 提交 20 个任务 (限流: 每秒最多 5 个)")
 
     # 提交 20 个任务
     for i in range(20):
-        await worker.push({'id': i}, task_name='api_call')
+        await producer.push(data={'id': i}, task_name='api_call')
 
     start = time.time()
-    await worker.run(auto_stop=True)
+    await consumer.run(auto_stop=True)
     duration = time.time() - start
 
     # 分析执行时间分布
@@ -310,13 +332,13 @@ python examples/rate_limit.py
 
 ### 4. 状态查询
 
-实时查询 Worker 的执行情况，支持多维度统计分析。
+实时查询任务执行情况，支持多维度统计分析。
 
 **示例代码**：[examples/stats.py](examples/stats.py)
 
 ```python
 import asyncio
-from flowmix import Task, Worker, Stats
+from flowmix import Task, TaskQueue, TaskProducer, TaskConsumer, ConsumerConfig, Cache, Stats
 
 task = Task(name='process')
 
@@ -329,17 +351,27 @@ async def process(data):
     return {"id": data['id']}
 
 async def main():
-    # 创建 Worker（使用默认数据库路径）
-    worker = Worker(tasks=task, num_workers=5)
+    # 初始化队列和缓存
+    queue = TaskQueue(db_path=".flowmix/flowmix.db")
+    cache = Cache(db_path=".flowmix/flowmix.db")
+
+    # 创建生产者和消费者
+    producer = TaskProducer(queue=queue)
+    consumer = TaskConsumer(
+        tasks={'process': task},
+        queue=queue,
+        cache=cache,
+        config=ConsumerConfig(num_workers=5)
+    )
 
     print("📋 提交 50 个任务 (10% 失败率)")
 
     # 提交任务
     for i in range(50):
-        await worker.push({'id': i}, task_name='process')
+        await producer.push(data={'id': i}, task_name='process')
 
     # 执行任务
-    await worker.run(auto_stop=True)
+    await consumer.run(auto_stop=True)
 
     # 查询统计信息
     print("\n📊 执行统计:")
