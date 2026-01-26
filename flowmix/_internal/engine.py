@@ -12,10 +12,10 @@ import asyncio
 import logging
 from typing import Dict, Any, Tuple, Optional
 
-from .task import Task
-from .queue.cache import Cache
+from ..task import Task
+from ..storage.cache import Cache
 from .limiter import ConcurrencyLimiter
-from .queue.task_queue import TaskQueue
+from ..storage.task_queue import TaskQueue
 
 
 class TaskEngine:
@@ -28,7 +28,7 @@ class TaskEngine:
     - 重试逻辑（根据配置的 max_retries 和 retry_delay）
     - 执行任务
 
-    这是一个内部类，由 TaskConsumer 使用
+    这是一个内部类，由 TaskRunner 使用
     """
 
     def __init__(

@@ -235,8 +235,8 @@ class Task:
         """
         if not self._producer:
             raise RuntimeError(
-                f"Task '{self.name}' is not attached to a Consumer. "
-                "Please create a TaskConsumer instance with this task first."
+                f"Task '{self.name}' is not attached to a Runner. "
+                "Please create a TaskRunner instance with this task first."
             )
 
         # 立即提交到队列（如果在 execute 中，自动关联父任务）

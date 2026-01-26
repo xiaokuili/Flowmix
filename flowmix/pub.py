@@ -9,7 +9,7 @@ Pub - 任务发布器
 import logging
 from typing import Dict, Any, Optional
 
-from .queue.task_queue import TaskQueue
+from .storage.task_queue import TaskQueue
 
 
 class Pub:

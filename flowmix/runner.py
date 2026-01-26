@@ -1,5 +1,5 @@
 """
-TaskConsumer - 任务消费器
+TaskRunner - 任务运行器
 
 职责：
 - 从队列拉取任务
@@ -17,23 +17,23 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional
 
 from .task import Task
-from .queue.task_queue import TaskQueue
-from .queue.cache import Cache
-from .limiter import ConcurrencyLimiter
-from .engine import TaskEngine
+from .storage.task_queue import TaskQueue
+from .storage.cache import Cache
+from ._internal.limiter import ConcurrencyLimiter
+from ._internal.engine import TaskEngine
 from .pub import Pub
 
 
 @dataclass
-class ConsumerConfig:
+class RunnerConfig:
     """
-    消费者配置
+    运行器配置
 
     Attributes:
         num_workers: 并发协程数量（默认 1）
         max_retries: 失败后最大重试次数（默认 0，即不重试）
         retry_delay: 重试间隔秒数（默认 0，即立即重试）
-        name: 消费者名称（默认自动生成）
+        name: 运行器名称（默认自动生成）
     """
     num_workers: int = 1
     max_retries: int = 0
@@ -41,9 +41,9 @@ class ConsumerConfig:
     name: Optional[str] = None
 
 
-class TaskConsumer:
+class TaskRunner:
     """
-    任务消费器
+    任务运行器
 
     职责：
     - 从队列拉取任务
@@ -62,16 +62,16 @@ class TaskConsumer:
         queue = TaskQueue(db_path=".flowmix/flowmix.db")
         cache = Cache(db_path=".flowmix/flowmix.db")
 
-        # 创建 Consumer
-        consumer = TaskConsumer(
+        # 创建 Runner
+        runner = TaskRunner(
             tasks={"crawl": crawl_task},
             queue=queue,
             cache=cache,
-            config=ConsumerConfig(num_workers=5, max_retries=3)
+            config=RunnerConfig(num_workers=5, max_retries=3)
         )
 
         # 执行任务
-        await consumer.run()
+        await runner.run()
     """
 
     def __init__(
@@ -79,21 +79,21 @@ class TaskConsumer:
         tasks: Dict[str, Task],
         queue: TaskQueue,
         cache: Cache,
-        config: Optional[ConsumerConfig] = None
+        config: Optional[RunnerConfig] = None
     ):
         """
-        初始化 TaskConsumer
+        初始化 TaskRunner
 
         Args:
             tasks: 任务字典 {task_name: Task}
             queue: TaskQueue 实例
             cache: Cache 实例
-            config: 消费者配置
+            config: 运行器配置
         """
         self.tasks = tasks
         self._queue = queue
         self._cache = cache
-        self.config = config or ConsumerConfig()
+        self.config = config or RunnerConfig()
 
         # 设置名称
         self.name = self.config.name or self._generate_name()
@@ -101,7 +101,7 @@ class TaskConsumer:
 
         # 核心组件
         self._limiter = ConcurrencyLimiter()
-        self._executor = TaskEngine(
+        self._engine = TaskEngine(
             cache=cache,
             limiter=self._limiter,
             queue=queue,
@@ -127,7 +127,7 @@ class TaskConsumer:
 
         self.logger = logging.getLogger(__name__)
         self.logger.info(
-            f"TaskConsumer initialized: {self.name} "
+            f"TaskRunner initialized: {self.name} "
             f"(num_workers={self.num_workers}, "
             f"max_retries={self.config.max_retries}, "
             f"retry_delay={self.config.retry_delay}s)"
@@ -135,11 +135,11 @@ class TaskConsumer:
 
     @staticmethod
     def _generate_name() -> str:
-        """生成消费者名称"""
+        """生成运行器名称"""
         hostname = socket.gethostname()
         pid = os.getpid()
         timestamp = int(time.time())
-        return f"consumer-{hostname}-{pid}-{timestamp}"
+        return f"runner-{hostname}-{pid}-{timestamp}"
 
     def _setup_task_callbacks(self):
         """为每个 Task 设置回调中使用的 producer"""
@@ -154,7 +154,7 @@ class TaskConsumer:
         max_idle_time: float = 2.0
     ):
         """
-        启动消费者
+        启动运行器
 
         默认行为：持续运行等待新任务，直到收到停止信号（Ctrl+C 或 stop()）
         适用于生产环境、长期运行的后台服务
@@ -168,10 +168,10 @@ class TaskConsumer:
 
         Example:
             # 生产环境：持续运行
-            await consumer.run()  # 一直运行，按 Ctrl+C 停止
+            await runner.run()  # 一直运行，按 Ctrl+C 停止
 
             # 测试/批处理：自动停止
-            await consumer.run(auto_stop=True)  # 队列为空后自动停止
+            await runner.run(auto_stop=True)  # 队列为空后自动停止
         """
         self.running = True
         self._stop_event = asyncio.Event()
@@ -183,7 +183,7 @@ class TaskConsumer:
         except ValueError:
             pass
 
-        self.logger.info(f"TaskConsumer {self.name} started with {self.num_workers} concurrent workers")
+        self.logger.info(f"TaskRunner {self.name} started with {self.num_workers} concurrent workers")
 
         # 创建 worker 协程
         workers = [
@@ -226,7 +226,7 @@ class TaskConsumer:
                 await asyncio.gather(*workers, return_exceptions=True)
 
         except Exception as e:
-            self.logger.error(f"TaskConsumer error: {e}", exc_info=True)
+            self.logger.error(f"TaskRunner error: {e}", exc_info=True)
             self.running = False
             self._stop_event.set()
             for w in workers:
@@ -300,7 +300,7 @@ class TaskConsumer:
             return
 
         # 2. 执行任务（委托给 TaskEngine）
-        result, status = await self._executor.execute(msg, task, worker_name)
+        result, status = await self._engine.execute(msg, task, worker_name)
 
         # 3. 更新统计
         self.stats["processed"] += 1
@@ -330,12 +330,12 @@ class TaskConsumer:
     def _cleanup(self):
         """清理资源"""
         self.logger.info(
-            f"TaskConsumer {self.name} stopped. Stats: {self.stats}"
+            f"TaskRunner {self.name} stopped. Stats: {self.stats}"
         )
 
     def stop(self):
-        """停止消费者（设置停止标志和事件）"""
-        self.logger.info("Stopping consumer...")
+        """停止运行器（设置停止标志和事件）"""
+        self.logger.info("Stopping runner...")
         self.running = False
         if self._stop_event:
             self._stop_event.set()

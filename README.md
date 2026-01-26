@@ -27,7 +27,7 @@ pip install --force-reinstall git+https://github.com/xiaokuili/Flowmix.git@v0.5.
 ## 🚀 快速开始
 
 ```python
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache
 
 # 定义任务
 task = Task(name='process')
@@ -51,14 +51,14 @@ async def main():
     pub = Pub(queue=queue)
     await pub.push(data={"url": "http://example.com"}, task_name='process')
 
-    # 创建消费者（执行任务）
-    consumer = TaskConsumer(
+    # 创建运行器（执行任务）
+    runner = TaskRunner(
         tasks={'process': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=5)
+        config=RunnerConfig(num_workers=5)
     )
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
 
 if __name__ == "__main__":
     import asyncio
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 ```python
 import asyncio
 import time
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache
 
 task = Task(name='process')
 
@@ -93,13 +93,13 @@ async def run_with_workers(num_workers, total_tasks):
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建发布器和消费者
+    # 创建发布器和运行器
     pub = Pub(queue=queue)
-    consumer = TaskConsumer(
+    runner = TaskRunner(
         tasks={'process': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=num_workers)
+        config=RunnerConfig(num_workers=num_workers)
     )
 
     # 提交任务
@@ -108,7 +108,7 @@ async def run_with_workers(num_workers, total_tasks):
 
     # 计时执行
     start = time.time()
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
     duration = time.time() - start
 
     return duration
@@ -161,7 +161,7 @@ python examples/concurrency.py
 
 ```python
 import asyncio
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache
 
 # 创建支持去重的任务
 task = Task(name='fetch', dedup=True)
@@ -186,13 +186,13 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建发布器和消费者
+    # 创建发布器和运行器
     pub = Pub(queue=queue)
-    consumer = TaskConsumer(
+    runner = TaskRunner(
         tasks={'fetch': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=3)
+        config=RunnerConfig(num_workers=3)
     )
 
     print("📋 提交 10 个任务 (5 个唯一 URL，每个重复 2 次)")
@@ -209,7 +209,7 @@ async def main():
     for url in urls * 2:
         await pub.push(data={'url': url}, task_name='fetch')
 
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
 
     print(f"\n📊 效果统计:")
     print(f"  - 提交任务数: 10")
@@ -249,7 +249,7 @@ python examples/dedup.py
 ```python
 import asyncio
 import time
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache
 
 # 创建带限流的任务（每秒最多 5 个）
 task = Task(name='api_call', concurrency_limit=5)
@@ -268,13 +268,13 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建发布器和消费者
+    # 创建发布器和运行器
     pub = Pub(queue=queue)
-    consumer = TaskConsumer(
+    runner = TaskRunner(
         tasks={'api_call': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=20)  # 20 个并发 worker
+        config=RunnerConfig(num_workers=20)  # 20 个并发 worker
     )
 
     print("📋 提交 20 个任务 (限流: 每秒最多 5 个)")
@@ -284,7 +284,7 @@ async def main():
         await pub.push(data={'id': i}, task_name='api_call')
 
     start = time.time()
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
     duration = time.time() - start
 
     # 分析执行时间分布
@@ -338,7 +338,7 @@ python examples/rate_limit.py
 
 ```python
 import asyncio
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, Stats
 
 task = Task(name='process')
 
@@ -355,13 +355,13 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db")
     cache = Cache(db_path=".flowmix/flowmix.db")
 
-    # 创建发布器和消费者
+    # 创建发布器和运行器
     pub = Pub(queue=queue)
-    consumer = TaskConsumer(
+    runner = TaskRunner(
         tasks={'process': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=5)
+        config=RunnerConfig(num_workers=5)
     )
 
     print("📋 提交 50 个任务 (10% 失败率)")
@@ -371,7 +371,7 @@ async def main():
         await pub.push(data={'id': i}, task_name='process')
 
     # 执行任务
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
 
     # 查询统计信息
     print("\n📊 执行统计:")

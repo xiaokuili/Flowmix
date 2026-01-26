@@ -1,10 +1,10 @@
 """
 状态查询示例
 
-演示：实时查询 Consumer 的执行情况
+演示：实时查询 Runner 的执行情况
 """
 import asyncio
-from flowmix import Task, TaskQueue, Pub, TaskConsumer, ConsumerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, Stats
 
 task = Task(name='process')
 
@@ -21,13 +21,13 @@ async def main():
     queue = TaskQueue(db_path=".flowmix/flowmix.db", queue_name="stats_test")
     cache = Cache(db_path=".flowmix/flowmix.db", queue_name="stats_test")
 
-    # 创建发布器和消费者
+    # 创建发布器和运行器
     pub = Pub(queue=queue)
-    consumer = TaskConsumer(
+    runner = TaskRunner(
         tasks={'process': task},
         queue=queue,
         cache=cache,
-        config=ConsumerConfig(num_workers=5)
+        config=RunnerConfig(num_workers=5)
     )
 
     print("📋 提交 50 个任务 (10% 失败率)")
@@ -38,7 +38,7 @@ async def main():
         await pub.push(data={'id': i}, task_name='process')
 
     # 执行任务
-    await consumer.run(auto_stop=True)
+    await runner.run(auto_stop=True)
 
     # 查询统计信息
     print("\n📊 执行统计:")
