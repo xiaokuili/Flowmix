@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 
 import aiosqlite
 
-from .base import QueueBackend, TaskInfo, TreeStats
+from .base import QueueBackend
 
 
 class SQLiteQueue(QueueBackend):
@@ -270,77 +270,3 @@ class SQLiteQueue(QueueBackend):
             await self._db.close()
             self._db = None
         self.logger.info("Closed SQLite connection")
-
-    async def get_task_info(self, task_id: int) -> TaskInfo:
-        """查询任务信息"""
-        if not self._initialized:
-            await self._init_db()
-
-        conn = await self._get_connection()
-        cursor = await conn.execute(
-            f"""SELECT id, parent_id, task_name, data, priority, status,
-                       consumer, error, result, fingerprint,
-                       created_at, updated_at, completed_at
-                FROM {self.queue_name}
-                WHERE id = ?""",
-            (task_id,)
-        )
-        row = await cursor.fetchone()
-
-        if row is None:
-            raise ValueError(f"Task {task_id} not found")
-
-        return {
-            "id": row["id"],
-            "parent_id": row["parent_id"],
-            "task_name": row["task_name"],
-            "data": json.loads(row["data"]) if row["data"] else None,
-            "priority": row["priority"],
-            "status": row["status"],
-            "consumer": row["consumer"],
-            "error": row["error"],
-            "result": json.loads(row["result"]) if row["result"] else None,
-            "fingerprint": row["fingerprint"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "completed_at": row["completed_at"]
-        }
-
-    async def get_tree_stats(self, root_id: int) -> TreeStats:
-        """查询任务树统计信息"""
-        if not self._initialized:
-            await self._init_db()
-
-        conn = await self._get_connection()
-
-        # 使用递归 CTE 查询所有子任务
-        cursor = await conn.execute(
-            f"""
-            WITH RECURSIVE task_tree AS (
-                -- 根节点
-                SELECT id, status FROM {self.queue_name} WHERE id = ?
-                UNION ALL
-                -- 递归查询所有子节点
-                SELECT t.id, t.status
-                FROM {self.queue_name} t
-                INNER JOIN task_tree tt ON t.parent_id = tt.id
-            )
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
-            FROM task_tree
-            """,
-            (root_id,)
-        )
-        row = await cursor.fetchone()
-
-        return {
-            "total": row["total"] or 0,
-            "pending": row["pending"] or 0,
-            "processing": row["processing"] or 0,
-            "completed": row["completed"] or 0,
-            "failed": row["failed"] or 0
-        }

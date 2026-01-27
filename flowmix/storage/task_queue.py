@@ -6,13 +6,9 @@ TaskQueue - 任务队列操作接口
 """
 
 import logging
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any
 
 from .queue import QueueBackend, SQLiteQueue
-
-# 向后兼容
-QueueProvider = QueueBackend
-SQLiteProvider = SQLiteQueue
 
 
 class TaskQueue:
@@ -39,15 +35,15 @@ class TaskQueue:
         )
 
         # 使用 Redis 后端
-        from flowmix.queue.providers import RedisProvider
+        from flowmix.storage.queue import RedisQueue
         queue = TaskQueue(
-            provider=RedisProvider(redis_url="redis://localhost:6379/0")
+            provider=RedisQueue(redis_url="redis://localhost:6379/0")
         )
 
         # 使用 PostgreSQL 后端
-        from flowmix.queue.providers import PostgreSQLProvider
+        from flowmix.storage.queue import PostgreSQLQueue
         queue = TaskQueue(
-            provider=PostgreSQLProvider(dsn="postgresql://user:pass@localhost/db")
+            provider=PostgreSQLQueue(dsn="postgresql://user:pass@localhost/db")
         )
 
         # 发送消息
@@ -62,7 +58,7 @@ class TaskQueue:
 
     def __init__(
         self,
-        provider: Optional[QueueProvider] = None,
+        provider: Optional[QueueBackend] = None,
         db_path: str = ".flowmix/flowmix.db",
         queue_name: str = "tasks",
         timeout: float = 1.0,
@@ -71,16 +67,16 @@ class TaskQueue:
         初始化 TaskQueue
 
         Args:
-            provider: 队列提供者实例（可选）
-                     - 如果不指定，默认使用 SQLiteProvider
-                     - 可以传入 RedisProvider、PostgreSQLProvider 等
+            provider: 队列后端实例（可选）
+                     - 如果不指定，默认使用 SQLiteQueue
+                     - 可以传入 RedisQueue、PostgreSQLQueue 等
             db_path: SQLite 数据库文件路径（仅当 provider=None 时使用）
             queue_name: 队列名称（仅当 provider=None 时使用）
             timeout: pop() 等待超时时间（仅当 provider=None 时使用）
         """
         if provider is None:
             # 默认使用 SQLite 后端
-            self._provider = SQLiteProvider(
+            self._provider = SQLiteQueue(
                 db_path=db_path,
                 queue_name=queue_name,
                 timeout=timeout
@@ -210,48 +206,3 @@ class TaskQueue:
     async def close(self):
         """关闭连接"""
         await self._provider.close()
-
-    async def get_task_info(self, task_id: int) -> Dict[str, Any]:
-        """
-        查询任务信息
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            任务信息字典，包含：
-            - id: 任务 ID
-            - status: 任务状态（pending/processing/completed/failed）
-            - data: 任务数据
-            - result: 执行结果
-            - error: 错误信息
-            - created_at: 创建时间
-            - updated_at: 更新时间
-            等
-
-        Example:
-            info = await queue.get_task_info(task_id)
-            print(f"Status: {info['status']}")
-        """
-        return await self._provider.get_task_info(task_id)
-
-    async def get_tree_stats(self, root_id: int) -> Dict[str, Any]:
-        """
-        查询任务树统计信息
-
-        Args:
-            root_id: 根任务 ID
-
-        Returns:
-            统计字典，包含：
-            - total: 总任务数
-            - pending: 待处理任务数
-            - processing: 处理中任务数
-            - completed: 已完成任务数
-            - failed: 失败任务数
-
-        Example:
-            stats = await queue.get_tree_stats(root_id)
-            print(f"Total: {stats['total']}, Completed: {stats['completed']}")
-        """
-        return await self._provider.get_tree_stats(root_id)

@@ -5,7 +5,7 @@
 """
 import asyncio
 import time
-from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, TaskStats
 
 # 创建任务
 task = Task(name='api_call')
@@ -34,7 +34,7 @@ def send_alert(message: str):
     """模拟发送告警"""
     print(f"\n🚨 告警触发: {message}")
 
-def check_metrics(stats: Stats):
+def check_metrics(stats: TaskStats):
     """检查指标并触发告警"""
     overall = stats.get_worker_stats()
 
@@ -70,7 +70,7 @@ def check_metrics(stats: Stats):
 
 async def monitor_in_realtime(queue_name: str, interval: int = 5):
     """实时监控（后台任务）"""
-    stats = Stats(db_path='.flowmix/flowmix.db', queue_name=queue_name)
+    stats = TaskStats(db_path='.flowmix/flowmix.db', queue_name=queue_name)
 
     while True:
         await asyncio.sleep(interval)
@@ -139,7 +139,7 @@ async def main():
     print("📊 最终统计报告")
     print("=" * 50)
 
-    stats = Stats(db_path='.flowmix/flowmix.db', queue_name=queue_name)
+    stats = TaskStats(db_path='.flowmix/flowmix.db', queue_name=queue_name)
 
     # 整体统计
     overall = stats.get_worker_stats()
@@ -186,7 +186,7 @@ async def main():
    from prometheus_client import Gauge
 
    success_rate = Gauge('flowmix_success_rate', 'Task success rate')
-   stats = Stats(db_path='.flowmix/flowmix.db')
+   stats = TaskStats(db_path='.flowmix/flowmix.db')
    overall = stats.get_worker_stats()
    success_rate.set(overall['success_rate'])
 
@@ -206,7 +206,7 @@ async def main():
        )
 
 4️⃣ 自定义监控面板：
-   - 使用 Stats API 获取实时数据
+   - 使用 TaskStats API 获取实时数据
    - 可视化展示任务状态、成功率、错误分布等
    - 设置自定义告警规则和阈值
 """)

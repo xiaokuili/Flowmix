@@ -4,7 +4,7 @@
 演示：实时查询 Runner 的执行情况
 """
 import asyncio
-from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, Stats
+from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig, Cache, TaskStats
 
 task = Task(name='process')
 
@@ -45,7 +45,7 @@ async def main():
         print("\n📊 执行统计:")
         print("=" * 50)
 
-        stats_reader = Stats(db_path='.flowmix/flowmix.db', queue_name='stats_test')
+        stats_reader = TaskStats(db_path='.flowmix/flowmix.db', queue_name='stats_test')
 
         # 获取整体统计
         overall = stats_reader.get_worker_stats()

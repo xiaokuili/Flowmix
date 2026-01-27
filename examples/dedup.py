@@ -14,7 +14,7 @@
 """
 import asyncio
 from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig
-from flowmix.storage.queue import RedisProvider
+from flowmix.storage.queue import RedisQueue
 from flowmix.storage.cache import RedisCache
 
 
@@ -43,7 +43,7 @@ async def main():
 
     # 初始化 Redis 队列和缓存
     queue = TaskQueue(
-        provider=RedisProvider(
+        provider=RedisQueue(
             redis_url=redis_url,
             queue_name=queue_name
         )

@@ -1,5 +1,5 @@
 """
-Stats - Worker 状态查询器
+SQLiteStats - 基于 SQLite 的统计查询实现
 
 查询 Worker 的执行统计（基于 SQLite 数据库）
 支持按 worker_id、时间范围、任务类型等多维度查询
@@ -7,36 +7,47 @@ Stats - Worker 状态查询器
 
 import sqlite3
 import threading
+import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+from .base import (
+    Stats,
+    TaskInfo,
+    TaskTreeStats,
+    WorkerStats,
+    WorkerInfo,
+    FailedTask,
+    ProcessingTask
+)
 
-class Stats:
+
+class SQLiteStats(Stats):
     """
-    Worker 状态查询器
+    SQLite 统计查询实现
 
     查询 Worker 的执行统计和性能指标
 
     Example:
-        from flowmix import Stats
+        from flowmix.storage.stats import SQLiteStats
         from datetime import datetime
 
-        reader = Stats(db_path=".flowmix/flowmix.db")
+        stats = SQLiteStats(db_path=".flowmix/flowmix.db")
 
         # 查询所有 Worker 的整体执行情况
-        stats = reader.get_worker_stats()
-        print(f"总执行: {stats['total']} 个任务, 成功率: {stats['success_rate']*100:.1f}%")
-        print(f"吞吐量: {stats['qps']:.2f} tasks/s")
+        overall = stats.get_worker_stats()
+        print(f"总执行: {overall['total']} 个任务, 成功率: {overall['success_rate']*100:.1f}%")
+        print(f"吞吐量: {overall['qps']:.2f} tasks/s")
 
         # 查询今天的执行情况
         today = datetime.now().replace(hour=0, minute=0, second=0)
-        stats = reader.get_worker_stats(start_time=today)
+        today_stats = stats.get_worker_stats(start_time=today)
 
         # 查询某个 Worker 的执行情况
-        stats = reader.get_worker_stats(worker_id='worker-MacBook-12345-1234567890')
+        worker_stats = stats.get_worker_stats(worker_id='worker-1')
 
         # 列出所有 Worker
-        workers = reader.list_workers()
+        workers = stats.list_workers()
         for w in workers:
             print(f"{w['worker_id']}: {w['completed']}/{w['total_tasks']}")
     """
@@ -47,7 +58,7 @@ class Stats:
         queue_name: str = "tasks"
     ):
         """
-        初始化 Stats
+        初始化 SQLiteStats
 
         Args:
             db_path: SQLite 数据库文件路径（与 Worker 使用相同路径）
@@ -72,47 +83,134 @@ class Stats:
             self._local.conn.execute("PRAGMA journal_mode=WAL")
         return self._local.conn
 
+    def get_task_info(self, task_id: int) -> Optional[TaskInfo]:
+        """获取任务详情"""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE id = ?",
+            (task_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        return {
+            'id': row['id'],
+            'parent_id': row['parent_id'],
+            'task_name': row['task_name'],
+            'data': json.loads(row['data']) if row['data'] else None,
+            'priority': row['priority'],
+            'status': row['status'],
+            'consumer': row['consumer'],
+            'error': row['error'],
+            'result': json.loads(row['result']) if row['result'] else None,
+            'fingerprint': row['fingerprint'],
+            'created_at': self._format_datetime(row['created_at']),
+            'updated_at': self._format_datetime(row['updated_at']),
+            'completed_at': self._format_datetime(row['completed_at'])
+        }
+
+    def get_children(self, parent_id: int) -> List[TaskInfo]:
+        """获取所有直接子任务"""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            f"SELECT * FROM {self.queue_name} WHERE parent_id = ? ORDER BY id ASC",
+            (parent_id,)
+        )
+
+        result = []
+        for row in cursor.fetchall():
+            result.append({
+                'id': row['id'],
+                'parent_id': row['parent_id'],
+                'task_name': row['task_name'],
+                'data': json.loads(row['data']) if row['data'] else None,
+                'priority': row['priority'],
+                'status': row['status'],
+                'consumer': row['consumer'],
+                'error': row['error'],
+                'result': json.loads(row['result']) if row['result'] else None,
+                'fingerprint': row['fingerprint'],
+                'created_at': self._format_datetime(row['created_at']),
+                'updated_at': self._format_datetime(row['updated_at']),
+                'completed_at': self._format_datetime(row['completed_at'])
+            })
+        return result
+
+    def get_task_tree_stats(self, root_id: int) -> TaskTreeStats:
+        """获取任务树的统计信息（递归查询所有子孙任务）"""
+        conn = self._get_connection()
+
+        # 使用 CTE 递归查询整棵树
+        cursor = conn.execute(f"""
+            WITH RECURSIVE tree AS (
+                SELECT * FROM {self.queue_name} WHERE id = ?
+                UNION ALL
+                SELECT t.* FROM {self.queue_name} t
+                INNER JOIN tree ON t.parent_id = tree.id
+            )
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+            FROM tree
+        """, (root_id,))
+
+        row = cursor.fetchone()
+        return {
+            "total": row["total"] or 0,
+            "pending": row["pending"] or 0,
+            "processing": row["processing"] or 0,
+            "completed": row["completed"] or 0,
+            "failed": row["failed"] or 0,
+        }
+
+    def get_task_tree_details(self, root_id: int) -> List[TaskInfo]:
+        """获取任务树的详细信息（递归查询所有子孙任务）"""
+        conn = self._get_connection()
+
+        # 使用 CTE 递归查询整棵树
+        cursor = conn.execute(f"""
+            WITH RECURSIVE tree AS (
+                SELECT * FROM {self.queue_name} WHERE id = ?
+                UNION ALL
+                SELECT t.* FROM {self.queue_name} t
+                INNER JOIN tree ON t.parent_id = tree.id
+            )
+            SELECT * FROM tree ORDER BY id ASC
+        """, (root_id,))
+
+        rows = cursor.fetchall()
+
+        # 返回任务列表
+        tasks = []
+        for row in rows:
+            tasks.append({
+                'id': row['id'],
+                'parent_id': row['parent_id'],
+                'task_name': row['task_name'],
+                'data': json.loads(row['data']) if row['data'] else None,
+                'priority': row['priority'],
+                'status': row['status'],
+                'consumer': row['consumer'],
+                'error': row['error'],
+                'result': json.loads(row['result']) if row['result'] else None,
+                'fingerprint': row['fingerprint'],
+                'created_at': self._format_datetime(row['created_at']),
+                'updated_at': self._format_datetime(row['updated_at']),
+                'completed_at': self._format_datetime(row['completed_at'])
+            })
+        return tasks
+
     def get_worker_stats(
         self,
         worker_id: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Any]:
-        """
-        查询 Worker 执行统计（支持多维度筛选）
-
-        Args:
-            worker_id: Worker ID（不指定则统计所有 Worker）
-            start_time: 开始时间（筛选 created_at >= start_time 的任务）
-            end_time: 结束时间（筛选 created_at <= end_time 的任务）
-
-        Returns:
-            {
-                'worker_id': 'worker-1',  # 如果指定了 worker_id
-                'total': 5000,            # 总任务数
-                'completed': 4500,        # 已完成
-                'failed': 200,            # 失败
-                'pending': 200,           # 待处理
-                'processing': 100,        # 处理中
-                'success_rate': 0.957,    # 成功率（completed / (completed + failed)）
-                'qps': 2.5,               # 吞吐量（tasks per second）
-                'avg_duration_seconds': 1.5,  # 平均执行时长
-                'start_time': '2024-01-20 00:00:00',
-                'end_time': '2024-01-20 23:59:59'
-            }
-
-        Example:
-            # 查询所有 Worker 的整体情况
-            stats = reader.get_worker_stats()
-
-            # 查询某个 Worker 的执行情况
-            stats = reader.get_worker_stats(worker_id='worker-1')
-
-            # 查询今天的执行情况
-            from datetime import datetime
-            today_start = datetime.now().replace(hour=0, minute=0, second=0)
-            stats = reader.get_worker_stats(start_time=today_start)
-        """
+    ) -> WorkerStats:
+        """查询 Worker 执行统计（支持多维度筛选）"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -169,7 +267,7 @@ class Stats:
             if duration > 0:
                 qps = finished / duration
 
-        result = {
+        result: WorkerStats = {
             'total': total,
             'completed': completed,
             'failed': failed,
@@ -196,45 +294,8 @@ class Stats:
         worker_id: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        按任务类型统计 Worker 执行情况
-
-        Args:
-            worker_id: Worker ID（不指定则统计所有 Worker）
-            start_time: 开始时间
-            end_time: 结束时间
-
-        Returns:
-            {
-                'crawl': {
-                    'total': 2500,
-                    'completed': 2300,
-                    'failed': 100,
-                    'pending': 50,
-                    'processing': 50,
-                    'success_rate': 0.958,
-                    'qps': 1.25,
-                    'avg_duration_seconds': 2.1
-                },
-                'parse': {
-                    'total': 2500,
-                    'completed': 2200,
-                    'failed': 100,
-                    'pending': 150,
-                    'processing': 50,
-                    'success_rate': 0.956,
-                    'qps': 1.25,
-                    'avg_duration_seconds': 0.5
-                }
-            }
-
-        Example:
-            # 查询今天各类型任务的执行情况
-            stats = reader.get_worker_stats_by_task_type(start_time=today_start)
-            for task_type, task_stats in stats.items():
-                print(f"{task_type}: {task_stats['completed']}/{task_stats['total']}")
-        """
+    ) -> Dict[str, WorkerStats]:
+        """按任务类型统计 Worker 执行情况"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -309,39 +370,9 @@ class Stats:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        active_threshold_seconds: int = 300  # 5 分钟
-    ) -> List[Dict[str, Any]]:
-        """
-        列出所有活跃的 Worker
-
-        Args:
-            start_time: 开始时间
-            end_time: 结束时间
-            active_threshold_seconds: 判断 Worker 是否活跃的阈值（秒，默认 300 秒）
-
-        Returns:
-            [
-                {
-                    'worker_id': 'worker-MacBook-12345-1234567890',
-                    'total_tasks': 5000,
-                    'completed': 4500,
-                    'failed': 200,
-                    'pending': 200,
-                    'processing': 100,
-                    'first_seen': '2024-01-20 00:00:00',
-                    'last_seen': '2024-01-20 23:59:59',
-                    'is_active': True  # 最近 active_threshold_seconds 内有活动
-                },
-                ...
-            ]
-
-        Example:
-            # 列出所有 Worker
-            workers = reader.list_workers()
-            for w in workers:
-                status = "🟢 活跃" if w['is_active'] else "🔴 停止"
-                print(f"{status} {w['worker_id']}: {w['completed']}/{w['total_tasks']}")
-        """
+        active_threshold_seconds: int = 300
+    ) -> List[WorkerInfo]:
+        """列出所有活跃的 Worker"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -405,39 +436,8 @@ class Stats:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        查询失败的任务
-
-        Args:
-            worker_id: Worker ID（不指定则查询所有 Worker）
-            start_time: 开始时间
-            end_time: 结束时间
-            limit: 最多返回多少条
-
-        Returns:
-            [
-                {
-                    'task_id': 456,
-                    'worker_id': 'worker-1',
-                    'task_type': 'crawl',
-                    'data': {'url': '...'},
-                    'error': 'Connection timeout',
-                    'created_at': '2024-01-20 10:00:00',
-                    'failed_at': '2024-01-20 10:00:10'
-                },
-                ...
-            ]
-
-        Example:
-            # 查询最近失败的任务
-            failed = reader.get_failed_tasks(limit=10)
-            for task in failed:
-                print(f"任务 {task['task_id']} 失败: {task['error']}")
-
-            # 查询某个 Worker 的失败任务
-            failed = reader.get_failed_tasks(worker_id='worker-1')
-        """
+    ) -> List[FailedTask]:
+        """查询失败的任务"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -477,7 +477,6 @@ class Stats:
 
         result = []
         for row in cursor.fetchall():
-            import json
             result.append({
                 'task_id': row['id'],
                 'worker_id': row['consumer'],
@@ -496,27 +495,7 @@ class Stats:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
     ) -> Dict[str, int]:
-        """
-        错误汇总统计
-
-        Args:
-            worker_id: Worker ID（不指定则统计所有 Worker）
-            start_time: 开始时间
-            end_time: 结束时间
-
-        Returns:
-            {
-                'Connection timeout': 30,
-                'HTTP 404': 15,
-                'Parse error': 5
-            }
-
-        Example:
-            # 查询错误分布
-            errors = reader.get_error_summary()
-            for error, count in errors.items():
-                print(f"{error}: {count} 次")
-        """
+        """错误汇总统计"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -555,32 +534,8 @@ class Stats:
     def get_processing_tasks(
         self,
         worker_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        获取正在处理的任务（用于实时监控）
-
-        Args:
-            worker_id: Worker ID（不指定则查询所有 Worker）
-
-        Returns:
-            [
-                {
-                    'task_id': 123,
-                    'worker_id': 'worker-1',
-                    'task_type': 'crawl',
-                    'data': {'url': '...'},
-                    'started_at': '2024-01-20 10:00:00',
-                    'duration_seconds': 5.2
-                },
-                ...
-            ]
-
-        Example:
-            # 查看正在执行的任务
-            processing = reader.get_processing_tasks()
-            for task in processing:
-                print(f"Worker {task['worker_id']} 正在执行 {task['task_type']}")
-        """
+    ) -> List[ProcessingTask]:
+        """获取正在处理的任务（用于实时监控）"""
         conn = self._get_connection()
 
         # 构建 WHERE 条件
@@ -612,7 +567,6 @@ class Stats:
 
         result = []
         for row in cursor.fetchall():
-            import json
             duration = (now - row['updated_at']) * 86400.0 if row['updated_at'] else 0.0
 
             result.append({
@@ -625,197 +579,6 @@ class Stats:
             })
 
         return result
-
-    def get_task_info(self, task_id: int) -> Optional[dict]:
-        """
-        获取任务详情
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            任务详情字典，如果不存在返回 None
-
-        Example:
-            info = reader.get_task_info(123)
-            if info:
-                print(f"状态: {info['status']}")
-                print(f"数据: {info['data']}")
-        """
-        conn = self._get_connection()
-        cursor = conn.execute(
-            f"SELECT * FROM {self.queue_name} WHERE id = ?",
-            (task_id,)
-        )
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-
-    def get_children(self, parent_id: int) -> list:
-        """
-        获取所有直接子任务
-
-        Args:
-            parent_id: 父任务 ID
-
-        Returns:
-            子任务列表
-
-        Example:
-            children = reader.get_children(100)
-            for child in children:
-                print(f"子任务 {child['id']}: {child['status']}")
-        """
-        conn = self._get_connection()
-        cursor = conn.execute(
-            f"SELECT * FROM {self.queue_name} WHERE parent_id = ? ORDER BY id ASC",
-            (parent_id,)
-        )
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_tree_stats(self, root_id: int, group_by_task: bool = False) -> dict:
-        """
-        获取任务树的统计信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-            group_by_task: 是否按任务名称分组统计（默认 False）
-
-        Returns:
-            统计字典，包含 total, pending, processing, completed, failed
-            如果 group_by_task=True，额外包含 by_task 字段
-
-        Example:
-            # 基本统计
-            stats = reader.get_tree_stats(100)
-            print(f"总任务数: {stats['total']}")
-            print(f"已完成: {stats['completed']}")
-            print(f"进度: {stats['completed'] / stats['total'] * 100:.1f}%")
-
-            # 按任务名称分组统计
-            stats = reader.get_tree_stats(100, group_by_task=True)
-            for task_name, task_stats in stats['by_task'].items():
-                print(f"{task_name}: {task_stats['completed']}/{task_stats['total']}")
-        """
-        conn = self._get_connection()
-
-        # 使用 CTE 递归查询整棵树
-        cursor = conn.execute(f"""
-            WITH RECURSIVE tree AS (
-                SELECT * FROM {self.queue_name} WHERE id = ?
-                UNION ALL
-                SELECT t.* FROM {self.queue_name} t
-                INNER JOIN tree ON t.parent_id = tree.id
-            )
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
-            FROM tree
-        """, (root_id,))
-
-        row = cursor.fetchone()
-        result = {
-            "total": row["total"] or 0,
-            "pending": row["pending"] or 0,
-            "processing": row["processing"] or 0,
-            "completed": row["completed"] or 0,
-            "failed": row["failed"] or 0,
-        }
-
-        # 如果需要按任务名称分组
-        if group_by_task:
-            cursor = conn.execute(f"""
-                WITH RECURSIVE tree AS (
-                    SELECT * FROM {self.queue_name} WHERE id = ?
-                    UNION ALL
-                    SELECT t.* FROM {self.queue_name} t
-                    INNER JOIN tree ON t.parent_id = tree.id
-                )
-                SELECT task_name, status, COUNT(*) as count
-                FROM tree
-                GROUP BY task_name, status
-            """, (root_id,))
-
-            by_task = {}
-            for row in cursor.fetchall():
-                task_name = row['task_name'] or 'unknown'
-                status = row['status']
-                count = row['count']
-
-                if task_name not in by_task:
-                    by_task[task_name] = {
-                        'total': 0,
-                        'pending': 0,
-                        'processing': 0,
-                        'completed': 0,
-                        'failed': 0
-                    }
-
-                by_task[task_name]['total'] += count
-                by_task[task_name][status] += count
-
-            result['by_task'] = by_task
-
-        return result
-
-    def get_tree_details(self, root_id: int) -> list:
-        """
-        获取任务树的详细信息（递归查询所有子孙任务）
-
-        Args:
-            root_id: 根任务 ID
-
-        Returns:
-            任务列表（按 ID 顺序），每个任务包含完整信息：
-            - id: 任务 ID
-            - parent_id: 父任务 ID
-            - task_name: 任务名称
-            - data: 任务参数（已解析为 dict）
-            - status: 任务状态
-            - result: 执行结果（已解析为 dict，如果有）
-            - error: 错误信息（如果失败）
-            - created_at, updated_at, completed_at: 时间戳
-
-        Example:
-            # 获取任务树的所有任务
-            details = reader.get_tree_details(100)
-            for task in details:
-                print(f"[{task['id']}] {task['task_name']}: {task['status']}")
-                print(f"  Data: {task['data']}")
-                if task['result']:
-                    print(f"  Result: {task['result']}")
-        """
-        import json
-        conn = self._get_connection()
-
-        # 使用 CTE 递归查询整棵树
-        cursor = conn.execute(f"""
-            WITH RECURSIVE tree AS (
-                SELECT * FROM {self.queue_name} WHERE id = ?
-                UNION ALL
-                SELECT t.* FROM {self.queue_name} t
-                INNER JOIN tree ON t.parent_id = tree.id
-            )
-            SELECT * FROM tree ORDER BY id ASC
-        """, (root_id,))
-
-        rows = cursor.fetchall()
-
-        # 返回任务列表
-        tasks = []
-        for row in rows:
-            task = dict(row)
-            # 解析 JSON 字段
-            if task.get('data'):
-                task['data'] = json.loads(task['data'])
-            if task.get('result'):
-                task['result'] = json.loads(task['result'])
-            tasks.append(task)
-        return tasks
 
     def _format_datetime(self, julian_day: Optional[float]) -> Optional[str]:
         """将 Julian Day 转换为 ISO 格式字符串"""

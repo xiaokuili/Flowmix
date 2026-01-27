@@ -12,22 +12,9 @@ from .sqlite import SQLiteQueue
 from .redis import RedisQueue
 from .postgresql import PostgreSQLQueue
 
-# 向后兼容：QueueProvider 作为 QueueBackend 的别名
-QueueProvider = QueueBackend
-
-# 向后兼容：旧的 Provider 类名
-SQLiteProvider = SQLiteQueue
-RedisProvider = RedisQueue
-PostgreSQLProvider = PostgreSQLQueue
-
 __all__ = [
     'QueueBackend',
-    'QueueProvider',  # 向后兼容
     'SQLiteQueue',
     'RedisQueue',
     'PostgreSQLQueue',
-    # 向后兼容
-    'SQLiteProvider',
-    'RedisProvider',
-    'PostgreSQLProvider',
 ]

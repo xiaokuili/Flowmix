@@ -319,10 +319,10 @@ cache = Cache(
 **示例代码**：[examples/stats.py](examples/stats.py) 和 [examples/monitoring.py](examples/monitoring.py)
 
 ```python
-from flowmix import Stats, Pub
+from flowmix import TaskStats, Pub
 
 # 获取整体统计
-stats = Stats(db_path='.flowmix/flowmix.db')
+stats = TaskStats(db_path='.flowmix/flowmix.db')
 overall = stats.get_worker_stats()
 print(f"成功率: {overall['success_rate']*100:.1f}%")
 print(f"平均耗时: {overall['avg_duration_seconds']:.3f} 秒")

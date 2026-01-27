@@ -5,12 +5,11 @@ Storage - 存储相关模块
 """
 
 from .task_queue import TaskQueue
-from .stats import Stats
+from .task_stats import TaskStats
 
 # 缓存模块
 from .cache import (
     CacheBackend,
-    CacheProvider,  # 向后兼容
     SQLiteCache,
     RedisCache,
     Cache,  # 向后兼容
@@ -19,35 +18,45 @@ from .cache import (
 # 队列模块
 from .queue import (
     QueueBackend,
-    QueueProvider,  # 向后兼容
     SQLiteQueue,
     RedisQueue,
     PostgreSQLQueue,
-    # 向后兼容
-    SQLiteProvider,
-    RedisProvider,
-    PostgreSQLProvider,
+)
+
+# 统计模块
+from .stats import (
+    Stats,
+    SQLiteStats,
+    TaskInfo,
+    TaskTreeStats,
+    WorkerStats,
+    WorkerInfo,
+    FailedTask,
+    ProcessingTask,
 )
 
 __all__ = [
     # 队列
     'TaskQueue',
     # 统计
-    'Stats',
+    'TaskStats',
     # 缓存
     'CacheBackend',
-    'CacheProvider',  # 向后兼容
     'SQLiteCache',
     'RedisCache',
     'Cache',  # 向后兼容
-    # 队列
+    # 队列后端
     'QueueBackend',
-    'QueueProvider',  # 向后兼容
     'SQLiteQueue',
     'RedisQueue',
     'PostgreSQLQueue',
-    # 向后兼容
-    'SQLiteProvider',
-    'RedisProvider',
-    'PostgreSQLProvider',
+    # 统计后端
+    'Stats',
+    'SQLiteStats',
+    'TaskInfo',
+    'TaskTreeStats',
+    'WorkerStats',
+    'WorkerInfo',
+    'FailedTask',
+    'ProcessingTask',
 ]

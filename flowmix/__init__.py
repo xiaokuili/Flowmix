@@ -43,7 +43,7 @@ from ._internal.limiter import ConcurrencyLimiter
 from .scheduler import Scheduler
 
 # 存储层相关
-from .storage import TaskQueue, Cache, Stats
+from .storage import TaskQueue, Cache, TaskStats
 
 # 可选：导出 storage 包（用于自定义后端）
 try:
@@ -59,7 +59,7 @@ __all__ = [
     "RunnerConfig",
     "TaskQueue",
     "Cache",
-    "Stats",
+    "TaskStats",
     "Scheduler",
     "ConcurrencyLimiter",
 
