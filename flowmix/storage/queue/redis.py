@@ -28,15 +28,20 @@ class RedisQueue(QueueBackend):
     - 适合高并发、分布式场景
 
     Example:
-        queue = RedisQueue(
-            redis_url="redis://localhost:6379/0",
-            queue_name="tasks"
-        )
+        import redis.asyncio as aioredis
+
+        redis = await aioredis.from_url("redis://localhost:6379/0")
+        queue = RedisQueue(redis=redis, queue_name="tasks")
+
+        # 或者使用 factory
+        from flowmix.storage import create_redis_storage
+        storage = await create_redis_storage()
+        queue = storage.queue
     """
 
     def __init__(
         self,
-        redis_url: str = "redis://localhost:6379/0",
+        redis: Any,
         queue_name: str = "tasks",
         timeout: float = 1.0,
     ):
@@ -44,38 +49,20 @@ class RedisQueue(QueueBackend):
         初始化 Redis Queue
 
         Args:
-            redis_url: Redis 连接 URL
+            redis: Redis 连接实例（必需）
             queue_name: 队列名称（Redis key 前缀）
             timeout: pop() 等待超时时间（秒）
         """
-        try:
-            import redis.asyncio as aioredis
-            self._aioredis = aioredis
-        except ImportError:
-            raise ImportError(
-                "redis is required for RedisQueue. "
-                "Install it with: pip install 'flowmix[redis]'"
-            )
+        if redis is None:
+            raise ValueError("redis connection is required")
 
-        self.redis_url = redis_url
+        self._redis = redis
         self.queue_name = queue_name
         self.timeout = timeout
-
-        # Redis 连接
-        self._redis: Optional[Any] = None
         self._next_id = 0  # 消息 ID 计数器
 
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"RedisQueue initialized: redis_url={redis_url}, queue_name={queue_name}")
-
-    async def _get_connection(self):
-        """获取 Redis 连接"""
-        if self._redis is None:
-            self._redis = await self._aioredis.from_url(
-                self.redis_url,
-                decode_responses=True
-            )
-        return self._redis
+        self.logger.info(f"RedisQueue initialized: queue_name={queue_name}")
 
     def _get_key(self, suffix: str) -> str:
         """生成 Redis key"""
@@ -89,7 +76,7 @@ class RedisQueue(QueueBackend):
         task_name: Optional[str] = None
     ) -> int:
         """将消息放入队列"""
-        redis = await self._get_connection()
+        redis = self._redis
 
         # 生成消息 ID
         msg_id = await redis.incr(self._get_key("counter"))
@@ -123,7 +110,7 @@ class RedisQueue(QueueBackend):
 
     async def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
         """从队列取出消息"""
-        redis = await self._get_connection()
+        redis = self._redis
         start_time = time.time()
 
         while True:
@@ -131,7 +118,7 @@ class RedisQueue(QueueBackend):
             items = await redis.zpopmin(self._get_key("pending"), 1)
 
             if items:
-                msg_id_str, score = items[0]
+                msg_id_str, _ = items[0]  # score 不需要使用
                 msg_id = int(msg_id_str)
 
                 # 获取消息数据
@@ -177,7 +164,7 @@ class RedisQueue(QueueBackend):
         fingerprint: Optional[str] = None
     ):
         """确认消息已处理"""
-        redis = await self._get_connection()
+        redis = self._redis
 
         # 获取消息
         msg_json = await redis.hget(self._get_key("messages"), message_id)
@@ -185,6 +172,7 @@ class RedisQueue(QueueBackend):
             return
 
         message = json.loads(msg_json)
+        parent_id = message.get("parent_id")
 
         # 更新状态
         message["status"] = "failed" if failed else "completed"
@@ -202,21 +190,67 @@ class RedisQueue(QueueBackend):
 
         self.logger.debug(f"ACKed message {message_id} as {message['status']}")
 
+        # 如果有父任务，检查是否需要将父任务状态更新为 'done'
+        if parent_id:
+            await self._update_parent_status_if_done(redis, parent_id)
+
+    async def _update_parent_status_if_done(self, redis, parent_id: int):
+        """
+        检查父任务是否应该更新为 'done' 状态
+
+        当父任务本身是 'completed' 状态，且所有子任务都已完成时，将父任务状态更新为 'done'
+        """
+        # 获取父任务
+        msg_json = await redis.hget(self._get_key("messages"), parent_id)
+        if not msg_json:
+            return
+
+        parent_message = json.loads(msg_json)
+        if parent_message.get("status") != "completed":
+            return  # 父任务状态不是 completed，无需更新
+
+        # 获取所有消息，检查父任务的子任务
+        all_messages = await redis.hgetall(self._get_key("messages"))
+        total_children = 0
+        finished_children = 0
+
+        for msg_id, msg_json in all_messages.items():
+            msg = json.loads(msg_json)
+            if msg.get("parent_id") == parent_id:
+                total_children += 1
+                if msg.get("status") in ("completed", "failed", "done"):
+                    finished_children += 1
+
+        # 如果所有子任务都已完成，更新父任务状态为 'done'
+        if total_children > 0 and total_children == finished_children:
+            parent_message["status"] = "done"
+            parent_message["updated_at"] = time.time()
+            await redis.hset(
+                self._get_key("messages"),
+                parent_id,
+                json.dumps(parent_message)
+            )
+            self.logger.debug(f"Updated task {parent_id} status to 'done' (all children completed)")
+
+            # 递归检查父任务的父任务
+            if parent_message.get("parent_id"):
+                await self._update_parent_status_if_done(redis, parent_message["parent_id"])
+
     async def get_pending_count(self) -> int:
         """获取待处理消息数量"""
-        redis = await self._get_connection()
+        redis = self._redis
         count = await redis.zcard(self._get_key("pending"))
         return count
 
     async def get_stream_length(self) -> int:
         """获取队列总长度"""
-        redis = await self._get_connection()
+        redis = self._redis
         count = await redis.hlen(self._get_key("messages"))
         return count
 
     async def clear_all(self):
         """清空所有消息"""
-        redis = await self._get_connection()
+        redis = self._redis
         await redis.delete(
             self._get_key("pending"),
             self._get_key("messages"),
@@ -225,8 +259,9 @@ class RedisQueue(QueueBackend):
         self.logger.warning("Cleared all messages from queue")
 
     async def close(self):
-        """关闭 Redis 连接"""
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
-        self.logger.info("Closed Redis connection")
+        """
+        关闭队列（释放资源）
+
+        注意：不会关闭 Redis 连接，连接应由外部管理
+        """
+        self.logger.info("RedisQueue closed")

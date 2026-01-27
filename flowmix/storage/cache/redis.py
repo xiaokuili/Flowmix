@@ -32,13 +32,10 @@ class RedisCache(CacheBackend):
     - 如果设置了 TTL，只查找最近 TTL 秒内完成的任务
 
     Example:
-        from flowmix.storage.cache import RedisCache
+        import redis.asyncio as aioredis
 
-        # 创建缓存管理器
-        cache = RedisCache(
-            redis_url="redis://localhost:6379/0",
-            queue_name="tasks"
-        )
+        redis = await aioredis.from_url("redis://localhost:6379/0")
+        cache = RedisCache(redis=redis, queue_name="tasks")
 
         # 检查缓存（永久缓存）
         result = await cache.check(task_name="crawl", data={"url": "http://example.com"})
@@ -51,44 +48,33 @@ class RedisCache(CacheBackend):
             data={"endpoint": "/users/123"},
             ttl=3600
         )
+
+        # 或者使用 factory
+        from flowmix.storage import create_redis_storage
+        storage = await create_redis_storage()
+        cache = storage.cache
     """
 
     def __init__(
         self,
-        redis_url: str = "redis://localhost:6379/0",
+        redis: Any,
         queue_name: str = "tasks"
     ):
         """
         初始化缓存管理器
 
         Args:
-            redis_url: Redis 连接 URL
+            redis: Redis 连接实例（必需）
             queue_name: 队列名称（Redis key 前缀）
         """
-        try:
-            import redis.asyncio as aioredis
-            self._aioredis = aioredis
-        except ImportError:
-            raise ImportError(
-                "redis is required for RedisCache. "
-                "Install it with: pip install 'flowmix[redis]'"
-            )
+        if redis is None:
+            raise ValueError("redis connection is required")
 
-        self.redis_url = redis_url
+        self._redis = redis
         self.queue_name = queue_name
-        self._redis: Optional[Any] = None
 
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"RedisCache initialized: redis_url={redis_url}, queue_name={queue_name}")
-
-    async def _get_connection(self):
-        """获取 Redis 连接"""
-        if self._redis is None:
-            self._redis = await self._aioredis.from_url(
-                self.redis_url,
-                decode_responses=True
-            )
-        return self._redis
+        self.logger.info(f"RedisCache initialized: queue_name={queue_name}")
 
     def _get_key(self, suffix: str) -> str:
         """生成 Redis key"""
@@ -139,7 +125,7 @@ class RedisCache(CacheBackend):
         import time
 
         fingerprint = self.generate_fingerprint(task_name, data)
-        redis = await self._get_connection()
+        redis = self._redis
 
         # 获取所有消息
         messages = await redis.hgetall(self._get_key("messages"))
@@ -180,8 +166,9 @@ class RedisCache(CacheBackend):
         return None
 
     async def close(self):
-        """关闭 Redis 连接"""
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
-            self.logger.info("RedisCache connection closed")
+        """
+        关闭缓存（释放资源）
+
+        注意：不会关闭 Redis 连接，连接应由外部管理
+        """
+        self.logger.info("RedisCache closed")

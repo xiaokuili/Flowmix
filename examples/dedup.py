@@ -14,8 +14,6 @@
 """
 import asyncio
 from flowmix import Task, TaskQueue, Pub, TaskRunner, RunnerConfig
-from flowmix.storage.queue import RedisQueue
-from flowmix.storage.cache import RedisCache
 
 
 # 创建支持去重的任务
@@ -41,14 +39,13 @@ async def main():
     redis_url = "redis://localhost:6379/0"
     queue_name = "dedup_test"
 
-    # 初始化 Redis 队列和缓存
-    queue = TaskQueue(
-        provider=RedisQueue(
-            redis_url=redis_url,
-            queue_name=queue_name
-        )
-    )
-    cache = RedisCache(redis_url=redis_url, queue_name=queue_name)
+    # 使用工厂函数创建共享连接的存储组件
+    from flowmix.storage import create_redis_storage
+    storage = await create_redis_storage(redis_url=redis_url, queue_name=queue_name)
+
+    # 使用存储组件
+    queue = TaskQueue(provider=storage.queue)
+    cache = storage.cache
 
     # 创建发布器和运行器
     pub = Pub(queue=queue)
@@ -85,8 +82,7 @@ async def main():
     print(f"  - 节省计算: {(10 - execute_count) / 10 * 100:.1f}%")
 
     # 清理资源
-    await cache.close()
-    await queue.close()
+    await storage.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

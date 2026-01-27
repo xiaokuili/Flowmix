@@ -196,6 +196,12 @@ class PostgreSQLQueue(QueueBackend):
         result_json = json.dumps(result) if result is not None else None
 
         async with pool.acquire() as conn:
+            # 获取当前任务的 parent_id
+            parent_id = await conn.fetchval(
+                f"SELECT parent_id FROM {self.queue_name} WHERE id = $1",
+                message_id
+            )
+
             if not failed and fingerprint:
                 await conn.execute(
                     f"""UPDATE {self.queue_name}
@@ -213,7 +219,52 @@ class PostgreSQLQueue(QueueBackend):
                     status, error, result_json, message_id
                 )
 
+            # 如果有父任务，检查是否需要将父任务状态更新为 'done'
+            if parent_id:
+                await self._update_parent_status_if_done(conn, parent_id)
+
         self.logger.debug(f"ACKed message {message_id} as {status}")
+
+    async def _update_parent_status_if_done(self, conn, parent_id: int):
+        """
+        检查父任务是否应该更新为 'done' 状态
+
+        当父任务本身是 'completed' 状态，且所有子任务都已完成时，将父任务状态更新为 'done'
+        """
+        # 检查父任务当前状态
+        row = await conn.fetchrow(
+            f"SELECT status, parent_id FROM {self.queue_name} WHERE id = $1",
+            parent_id
+        )
+        if not row or row['status'] != 'completed':
+            return  # 父任务不存在或状态不是 completed，无需更新
+
+        # 检查父任务的所有子任务是否都已完成
+        row = await conn.fetchrow(
+            f"""SELECT COUNT(*) as total,
+                       SUM(CASE WHEN status IN ('completed', 'failed', 'done') THEN 1 ELSE 0 END) as finished
+                FROM {self.queue_name}
+                WHERE parent_id = $1""",
+            parent_id
+        )
+        total = row['total']
+        finished = row['finished'] or 0
+
+        # 如果所有子任务都已完成，更新父任务状态为 'done'
+        if total > 0 and total == finished:
+            await conn.execute(
+                f"UPDATE {self.queue_name} SET status = 'done', updated_at = NOW() WHERE id = $1",
+                parent_id
+            )
+            self.logger.debug(f"Updated task {parent_id} status to 'done' (all children completed)")
+
+            # 递归检查父任务的父任务
+            grandparent_id = await conn.fetchval(
+                f"SELECT parent_id FROM {self.queue_name} WHERE id = $1",
+                parent_id
+            )
+            if grandparent_id:
+                await self._update_parent_status_if_done(conn, grandparent_id)
 
     async def get_pending_count(self) -> int:
         """获取待处理消息数量"""

@@ -27,12 +27,20 @@ from .queue import (
 from .stats import (
     Stats,
     SQLiteStats,
+    RedisStats,
     TaskInfo,
     TaskTreeStats,
     WorkerStats,
     WorkerInfo,
     FailedTask,
     ProcessingTask,
+)
+
+# 工厂函数
+from .factory import (
+    RedisStorage,
+    create_redis_storage,
+    create_redis_connection,
 )
 
 __all__ = [
@@ -53,10 +61,15 @@ __all__ = [
     # 统计后端
     'Stats',
     'SQLiteStats',
+    'RedisStats',
     'TaskInfo',
     'TaskTreeStats',
     'WorkerStats',
     'WorkerInfo',
     'FailedTask',
     'ProcessingTask',
+    # 工厂函数
+    'RedisStorage',
+    'create_redis_storage',
+    'create_redis_connection',
 ]

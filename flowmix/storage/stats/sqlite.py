@@ -101,7 +101,7 @@ class SQLiteStats(Stats):
             'data': json.loads(row['data']) if row['data'] else None,
             'priority': row['priority'],
             'status': row['status'],
-            'consumer': row['consumer'],
+            'worker_id': row['consumer'],  # 数据库字段名为 consumer，API 字段名为 worker_id
             'error': row['error'],
             'result': json.loads(row['result']) if row['result'] else None,
             'fingerprint': row['fingerprint'],
@@ -127,7 +127,7 @@ class SQLiteStats(Stats):
                 'data': json.loads(row['data']) if row['data'] else None,
                 'priority': row['priority'],
                 'status': row['status'],
-                'consumer': row['consumer'],
+                'worker_id': row['consumer'],  # 数据库字段名为 consumer，API 字段名为 worker_id
                 'error': row['error'],
                 'result': json.loads(row['result']) if row['result'] else None,
                 'fingerprint': row['fingerprint'],
@@ -194,7 +194,7 @@ class SQLiteStats(Stats):
                 'data': json.loads(row['data']) if row['data'] else None,
                 'priority': row['priority'],
                 'status': row['status'],
-                'consumer': row['consumer'],
+                'worker_id': row['consumer'],  # 数据库字段名为 consumer，API 字段名为 worker_id
                 'error': row['error'],
                 'result': json.loads(row['result']) if row['result'] else None,
                 'fingerprint': row['fingerprint'],

@@ -3,7 +3,7 @@ Stats - 统计查询模块
 
 支持多种后端实现：
 - SQLiteStats: 基于 SQLite 的统计查询（默认）
-- RedisStats: 基于 Redis 的统计查询（未来）
+- RedisStats: 基于 Redis 的统计查询
 - PostgreSQLStats: 基于 PostgreSQL 的统计查询（未来）
 """
 
@@ -17,6 +17,7 @@ from .base import (
     ProcessingTask,
 )
 from .sqlite import SQLiteStats
+from .redis import RedisStats
 
 __all__ = [
     # 抽象基类
@@ -30,4 +31,5 @@ __all__ = [
     'ProcessingTask',
     # 实现
     'SQLiteStats',
+    'RedisStats',
 ]

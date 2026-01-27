@@ -17,8 +17,8 @@ class TaskInfo(TypedDict, total=False):
     task_name: Optional[str]
     data: Optional[Dict[str, Any]]
     priority: int
-    status: str  # 'pending' | 'processing' | 'completed' | 'failed'
-    consumer: Optional[str]
+    status: str  # 'pending' | 'processing' | 'completed' | 'failed' | 'done'
+    worker_id: Optional[str]  # 处理该任务的 Worker ID
     error: Optional[str]
     result: Any
     fingerprint: Optional[str]
@@ -113,24 +113,6 @@ class Stats(ABC):
         pass
 
     @abstractmethod
-    def get_children(self, parent_id: int) -> List[TaskInfo]:
-        """
-        获取所有直接子任务
-
-        Args:
-            parent_id: 父任务 ID
-
-        Returns:
-            子任务列表
-
-        Example:
-            children = stats.get_children(100)
-            for child in children:
-                print(f"子任务 {child['id']}: {child['status']}")
-        """
-        pass
-
-    @abstractmethod
     def get_task_tree_stats(self, root_id: int) -> TaskTreeStats:
         """
         获取任务树的统计信息（递归统计所有子孙任务）
@@ -149,11 +131,23 @@ class Stats(ABC):
             - failed: 失败任务数
 
         Example:
-            # 查询某个爬虫任务树的进度
-            stats = stats.get_task_tree_stats(root_id=100)
-            progress = stats['completed'] / stats['total'] * 100
-            print(f"进度: {progress:.1f}%")
-            print(f"成功: {stats['completed']}, 失败: {stats['failed']}")
+            # 查询任务树进度
+            s = stats.get_task_tree_stats(root_id=100)
+
+            # 判断任务树是否完成（没有 pending 和 processing）
+            is_done = s['pending'] == 0 and s['processing'] == 0
+
+            # 计算完成进度
+            progress = (s['completed'] + s['failed']) / s['total']
+            print(f"进度: {progress * 100:.1f}%")
+
+            # 计算成功率（仅已完成的任务）
+            finished = s['completed'] + s['failed']
+            success_rate = s['completed'] / finished if finished > 0 else 0.0
+            print(f"成功率: {success_rate * 100:.1f}%")
+
+            # 判断是否有失败
+            has_failed = s['failed'] > 0
         """
         pass
 
