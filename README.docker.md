@@ -3,16 +3,54 @@
 本文档介绍如何使用 Docker 和 Docker Compose 部署 Flowmix 项目。
 
 ## 目录结构
+flowmix/
+├── __init__.py
+├── task.py                # 任务模型：Task 装饰器、Callback 定义
+├── sender /              # 提交任务
+│   ├── __init__.py
+│   ├── pub.py            # 直接推送任务
+│   └── cron.py           # 定时任务调度
+├── runner/                # 执行器：运行任务
+│   ├── __init__.py
+│   ├── task.py           # 定义任务通用接口
+│   ├── runner.py         # 任务运行器
+│   ├── engine.py         # 实现feature， retry ，limit ，cache
+│   ├── limit/            # 限流
+│   │   ├── __init__.py
+│   │   └── base.py
+│   └── cache/            # 缓存
+│       ├── __init__.py
+│       ├── base.py
+│       ├── redis.py
+│       └── sqlite.py
+├── stats.py                # 统计：查询状态
+└── common/                # 基础设施层
+    ├── __init__.py
+    ├── pool.py
+    └── queue/
+        ├── __init__.py
+        ├── base.py
+        ├── task_queue.py
+        ├── redis.py
+        ├── postgresql.py
+        └── sqlite.py
 
-```
-.
-├── docker-compose.yml          # 开发环境配置
-├── docker-compose.prod.yml     # 生产环境配置
-├── Dockerfile                  # Flowmix 应用镜像
-├── redis.conf                  # Redis 持久化配置
-├── .env.example               # 环境变量示例
-└── README.docker.md           # 本文档
-```
+# 简单场景：cache 自动跟随 queue
+runner = TaskRunner(
+    tasks={...},
+    url="redis://localhost:6379/0",
+    queue_name="tasks"
+)
+# 内部：queue 和 cache 都用 redis://localhost:6379/0，但 key 前缀不同
+
+# 高级场景：单独指定 cache
+runner = TaskRunner(
+    tasks={...},
+    url="redis://localhost:6379/0",
+    cache_url="redis://localhost:6379/1",  # 可选
+    queue_name="tasks"
+)
+
 
 ## 快速开始
 

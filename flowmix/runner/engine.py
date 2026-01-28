@@ -15,8 +15,8 @@ import os
 from typing import Dict, Any, Tuple, Optional
 
 from ..task import Task
-from ..storage.cache import Cache
-from .limiter import ConcurrencyLimiter
+from .cache.base import Cache
+from .limit.base import RateLimiter
 from ..storage.task_queue import TaskQueue
 
 
@@ -36,7 +36,7 @@ class TaskEngine:
     def __init__(
         self,
         cache: Cache,
-        limiter: ConcurrencyLimiter,
+        limiter: RateLimiter,
         queue: TaskQueue,
         max_retries: int = 0,
         retry_delay: float = 0,

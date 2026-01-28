@@ -39,8 +39,15 @@ Example:
 from .task import Task
 from .pub import Pub
 from .runner import TaskRunner, RunnerConfig
-from ._internal.limiter import ConcurrencyLimiter
 from .scheduler import Scheduler
+
+# 限流器（兼容旧 API）
+from .runner.limit import (
+    RateLimiter,
+    MemoryRateLimiter,
+    RedisRateLimiter,
+    ConcurrencyLimiter  # 别名，向后兼容
+)
 
 # 存储层相关
 from .storage import TaskQueue, Cache, TaskStats
@@ -61,7 +68,12 @@ __all__ = [
     "Cache",
     "TaskStats",
     "Scheduler",
-    "ConcurrencyLimiter",
+
+    # 限流器
+    "RateLimiter",
+    "MemoryRateLimiter",
+    "RedisRateLimiter",
+    "ConcurrencyLimiter",  # 向后兼容
 
     # 存储层相关
     "storage",

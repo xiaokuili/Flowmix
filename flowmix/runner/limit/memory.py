@@ -1,7 +1,8 @@
 """
-ConcurrencyLimiter - 并发限流器
+MemoryRateLimiter - 基于内存的限流器
 
 基于滑动窗口算法，控制任务的并发执行数量
+适用于单机部署场景
 """
 
 import asyncio
@@ -9,15 +10,18 @@ import time
 from collections import deque
 from typing import Dict, Optional
 
+from .base import RateLimiter
 
-class ConcurrencyLimiter:
+
+class MemoryRateLimiter(RateLimiter):
     """
-    并发限流器（全局单例）
+    基于内存的并发限流器（全局单例）
 
     功能：
     - 基于任务名称（task_name）控制每秒最大并发数
     - 使用滑动窗口算法：过去 1 秒内最多 N 个并发
     - 异步阻塞：超限时自动等待，直到有空位
+    - 适用于单机部署场景（不支持分布式）
 
     实现原理：
     - 为每个 task_name 维护一个时间戳队列（执行开始时间）
@@ -25,7 +29,7 @@ class ConcurrencyLimiter:
     - release() 时无需操作（依靠时间窗口自动清理）
 
     Example:
-        limiter = ConcurrencyLimiter()
+        limiter = MemoryRateLimiter()
 
         async def worker():
             # 获取执行许可（阻塞等待）
@@ -37,7 +41,7 @@ class ConcurrencyLimiter:
                 limiter.release('api_call')
     """
 
-    _instance: Optional['ConcurrencyLimiter'] = None
+    _instance: Optional['MemoryRateLimiter'] = None
     _lock = asyncio.Lock()
 
     def __new__(cls):
