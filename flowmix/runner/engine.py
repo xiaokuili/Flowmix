@@ -17,7 +17,7 @@ from typing import Dict, Any, Tuple, Optional
 from ..task import Task
 from .cache.base import Cache
 from .limit.base import RateLimiter
-from ..storage.task_queue import TaskQueue
+from ..common.queue import Queue
 
 
 class TaskEngine:
@@ -37,7 +37,7 @@ class TaskEngine:
         self,
         cache: Cache,
         limiter: RateLimiter,
-        queue: TaskQueue,
+        queue: Queue,
         max_retries: int = 0,
         retry_delay: float = 0,
         stop_event: Optional[asyncio.Event] = None
