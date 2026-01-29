@@ -15,8 +15,8 @@ from flowmix.runner.cache import MemoryCache
 from flowmix.sender import Pub
 
 
-# 1. 定义 Task
-fetch_task = Task(name='fetch')
+# 1. 定义 Task（启用去重功能）
+fetch_task = Task(name='fetch', dedup=True)
 
 # 用于追踪任务实际执行次数
 execution_count = 0
@@ -182,8 +182,8 @@ async def main():
     test_url = "http://example.com/ttl-test"
     await pub.push(data={"url": test_url}, task_name="fetch")
 
-    # 创建支持 TTL 的 Task
-    ttl_task = Task(name='fetch')
+    # 创建支持 TTL 的 Task（启用去重和 TTL）
+    ttl_task = Task(name='fetch', dedup=True, dedup_ttl=3)
 
     @ttl_task.execute
     async def execute_with_ttl(data):

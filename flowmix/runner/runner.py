@@ -86,6 +86,7 @@ class TaskRunner:
         url: str,
         queue_name: str = "tasks",
         cache_url: Optional[str] = None,
+        cache: Optional[Cache] = None,
         config: Optional[RunnerConfig] = None,
     ):
         """
@@ -96,11 +97,13 @@ class TaskRunner:
             url: 队列 URL（支持 redis://, postgresql://）
             queue_name: 队列名称
             cache_url: 缓存 URL（可选，如果不提供则不使用缓存）
+            cache: 缓存实例（可选，如果提供则直接使用，优先级高于 cache_url）
             config: 运行器配置
         """
         self.tasks = tasks
         self._url = url
         self._cache_url = cache_url
+        self._cache_instance = cache  # 用户提供的缓存实例
         self._queue_name = queue_name
         self.config = config or RunnerConfig()
 
@@ -166,6 +169,11 @@ class TaskRunner:
 
     async def _setup_cache(self):
         """设置缓存"""
+        # 优先使用用户提供的缓存实例
+        if self._cache_instance is not None:
+            self._cache = self._cache_instance
+            return
+
         if self._cache_url is None:
             # 不使用缓存
             self._cache = None
@@ -233,10 +241,10 @@ class TaskRunner:
             )
 
     def _setup_task_callbacks(self):
-        """为每个 Task 设置回调中使用的 producer"""
-        producer = Pub(self._queue)
+        """为每个 Task 设置回调中使用的 sender"""
+        sender = Pub(self._queue)
         for task in self.tasks.values():
-            task._sender = producer  # 设置 _sender 以支持 callback()
+            task._sender = sender  # 设置 _sender 以支持 callback()
 
     async def run(self):
         """

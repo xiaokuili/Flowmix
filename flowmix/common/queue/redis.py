@@ -88,6 +88,7 @@ class RedisQueue(Queue):
                 "data": json.dumps(data),
                 "priority": priority,
                 "status": "pending",
+                "chain_status": "pending",  # 任务链状态：初始为 pending
                 "created_at": time.time()
             }
 
@@ -189,51 +190,117 @@ class RedisQueue(Queue):
 
             logger.debug(f"ACKed message {message_id} as {message['status']}")
 
-            # 如果有父任务，检查是否需要将父任务状态更新为 'done'
-            if parent_id:
-                await self._update_parent_status_if_done(redis, parent_id)
+            # 如果任务本身完成或失败，更新其 chain_status
+            if message["status"] in ("completed", "failed"):
+                await self._update_chain_status_if_done(redis, message_id, parent_id)
 
-    async def _update_parent_status_if_done(self, redis, parent_id: int):
+    async def _update_chain_status_if_done(self, redis, task_id: int, parent_id: Optional[int]):
         """
-        检查父任务是否应该更新为 'done' 状态
+        更新任务（及其父任务）的 chain_status
 
-        当父任务本身是 'completed' 状态，且所有子任务都已完成时，将父任务状态更新为 'done'
+        当任务本身是 'completed' 或 'failed' 状态时：
+        1. 如果任务没有子任务，更新其 chain_status 为 'completed'
+        2. 如果有父任务，检查父任务是否应该更新 chain_status
+        """
+        # 1. 更新任务本身的 chain_status（如果它是叶子任务）
+        all_messages = await redis.hgetall(self._get_key("messages"))
+
+        # 检查是否有子任务
+        has_children = False
+        for _, msg_json in all_messages.items():
+            msg = json.loads(msg_json)
+            if msg.get("parent_id") == task_id:
+                has_children = True
+                break
+
+        if not has_children:
+            # 叶子任务，更新其 chain_status 为 'completed'
+            task_json = await redis.hget(self._get_key("messages"), task_id)
+            if task_json:
+                task_message = json.loads(task_json)
+                if task_message.get("status") in ("completed", "failed") and task_message.get("chain_status") != "completed":
+                    task_message["chain_status"] = "completed"
+                    task_message["updated_at"] = time.time()
+                    await redis.hset(
+                        self._get_key("messages"),
+                        task_id,
+                        json.dumps(task_message)
+                    )
+                    logger.debug(f"Updated task {task_id} chain_status to 'completed' (leaf task)")
+
+        # 2. 如果有父任务，递归检查并更新父任务的 chain_status
+        if parent_id:
+            await self._update_parent_chain_status(redis, parent_id, all_messages)
+
+    async def _update_parent_chain_status(self, redis, parent_id: int, all_messages: Dict):
+        """
+        更新父任务的 chain_status（内部方法）
         """
         # 获取父任务
-        msg_json = await redis.hget(self._get_key("messages"), parent_id)
-        if not msg_json:
+        parent_json = all_messages.get(str(parent_id))
+        if not parent_json:
+            parent_json = await redis.hget(self._get_key("messages"), parent_id)
+        if not parent_json:
             return
 
-        parent_message = json.loads(msg_json)
-        if parent_message.get("status") != "completed":
-            return  # 父任务状态不是 completed，无需更新
+        parent_message = json.loads(parent_json) if isinstance(parent_json, str) else parent_json
 
-        # 获取所有消息，检查父任务的子任务
-        all_messages = await redis.hgetall(self._get_key("messages"))
+        if parent_message.get("status") not in ("completed", "failed"):
+            return  # 父任务状态不是 completed/failed，无需更新
+        if parent_message.get("chain_status") == "completed":
+            return  # 已经是 completed，无需重复更新
+
+        # 检查父任务的子任务
         total_children = 0
-        finished_children = 0
+        has_pending = False
 
         for _, msg_json in all_messages.items():
             msg = json.loads(msg_json)
             if msg.get("parent_id") == parent_id:
                 total_children += 1
-                if msg.get("status") in ("completed", "failed", "done"):
-                    finished_children += 1
+                # 检查子任务是否完成
+                child_status = msg.get("status")
+                child_chain_status = msg.get("chain_status", "pending")
 
-        # 如果所有子任务都已完成，更新父任务状态为 'done'
-        if total_children > 0 and total_children == finished_children:
-            parent_message["status"] = "done"
+                # 只有子任务真正完成时才算（status 完成或 chain_status 完成）
+                is_child_finished = (
+                    child_status in ("completed", "failed") or
+                    child_chain_status == "completed"
+                )
+
+                if not is_child_finished and (
+                    child_status in ("pending", "processing") or
+                    child_chain_status == "processing"
+                ):
+                    has_pending = True
+                    break
+
+        # 判断父任务的 chain_status
+        new_chain_status = None
+        if total_children == 0:
+            # 没有子任务，chain_status 跟随 status
+            new_chain_status = "completed"
+        elif has_pending:
+            # 有子任务未完成
+            new_chain_status = "processing"
+        else:
+            # 所有子任务都已完成
+            new_chain_status = "completed"
+
+        # 更新父任务的 chain_status
+        if new_chain_status and new_chain_status != parent_message.get("chain_status"):
+            parent_message["chain_status"] = new_chain_status
             parent_message["updated_at"] = time.time()
             await redis.hset(
                 self._get_key("messages"),
                 parent_id,
                 json.dumps(parent_message)
             )
-            logger.debug(f"Updated task {parent_id} status to 'done' (all children completed)")
+            logger.debug(f"Updated task {parent_id} chain_status to '{new_chain_status}'")
 
             # 递归检查父任务的父任务
             if parent_message.get("parent_id"):
-                await self._update_parent_status_if_done(redis, parent_message["parent_id"])
+                await self._update_parent_chain_status(redis, parent_message["parent_id"], all_messages)
 
 
 
