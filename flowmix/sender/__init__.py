@@ -7,7 +7,12 @@ Sender - 任务提交模块
 """
 
 from .pub import Pub
-from .cron import Cron
+
+# Cron 为可选依赖
+try:
+    from .cron import Cron
+except ImportError:
+    Cron = None
 
 __all__ = [
     'Pub',

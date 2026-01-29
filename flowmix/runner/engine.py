@@ -14,7 +14,7 @@ import traceback
 import os
 from typing import Dict, Any, Tuple, Optional
 
-from ..task import Task
+from .task import Task
 from .cache.base import Cache
 from .limit.base import RateLimiter
 from ..common.queue import Queue
@@ -35,7 +35,7 @@ class TaskEngine:
 
     def __init__(
         self,
-        cache: Cache,
+        cache: Optional[Cache],
         limiter: RateLimiter,
         queue: Queue,
         max_retries: int = 0,
@@ -46,7 +46,7 @@ class TaskEngine:
         初始化 TaskEngine
 
         Args:
-            cache: 缓存实例
+            cache: 缓存实例（可选）
             limiter: 限流器实例
             queue: 队列实例
             max_retries: 最大重试次数
@@ -91,7 +91,7 @@ class TaskEngine:
             task_data = {k: v for k, v in msg.items() if k not in ("id", "task_name")}
 
         # 1. 缓存检查
-        if task.dedup:
+        if task.dedup and self._cache:
             cached = await self._check_cache(task_name, task_data, task.dedup_ttl)
             if cached is not None:
                 fingerprint_preview = self._cache.generate_fingerprint(task_name, task_data)[:8]
@@ -146,7 +146,7 @@ class TaskEngine:
 
                     # 生成指纹（用于去重）
                     fingerprint = None
-                    if task.dedup:
+                    if task.dedup and self._cache:
                         fingerprint = self._cache.generate_fingerprint(task_name, task_data)
 
                     self.logger.info(f"[{worker_name}] Task '{task_name}' {msg_id} completed successfully")
@@ -239,4 +239,6 @@ class TaskEngine:
         Returns:
             缓存的结果，如果未命中则返回 None
         """
+        if not self._cache:
+            return None
         return await self._cache.check(task_name=task_name, data=data, ttl=ttl)

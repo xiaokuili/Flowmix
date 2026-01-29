@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
-from ..task import Task
-from ..storage.task_queue import TaskQueue
+from .task import Task
+from ..common.queue import Queue
 from .cache.base import Cache
 from .cache.redis import RedisCache
 from .cache.sqlite import SQLiteCache
@@ -26,7 +26,7 @@ from .limit.base import RateLimiter
 from .limit.memory import MemoryRateLimiter
 from .limit.redis import RedisRateLimiter
 from .engine import TaskEngine
-from ..pub import Pub
+from ..sender.pub import Pub
 
 
 @dataclass
@@ -43,6 +43,7 @@ class RunnerConfig:
                      - None: 使用 MemoryRateLimiter（基于内存，单机）
                      - redis://...: 使用 RedisRateLimiter（基于 Redis，分布式）
     """
+
     num_workers: int = 1
     max_retries: int = 0
     retry_delay: float = 0
@@ -71,7 +72,7 @@ class TaskRunner:
         runner = TaskRunner(
             tasks={"crawl": crawl_task},
             url="redis://localhost:6379/0",
-            cache_url="redis://localhost:6379/1",  # 可选
+            cache_url=None,  # 可选，不提供则不使用缓存
             queue_name="tasks",
             config=RunnerConfig(num_workers=5, max_retries=3)
         )
@@ -86,7 +87,7 @@ class TaskRunner:
         url: str,
         queue_name: str = "tasks",
         cache_url: Optional[str] = None,
-        config: Optional[RunnerConfig] = None
+        config: Optional[RunnerConfig] = None,
     ):
         """
         初始化 TaskRunner
@@ -95,12 +96,12 @@ class TaskRunner:
             tasks: 任务字典 {task_name: Task}
             url: 队列 URL（支持 redis://, sqlite://, postgresql://）
             queue_name: 队列名称
-            cache_url: 缓存 URL（可选，如果不提供则使用 url）
+            cache_url: 缓存 URL（可选，如果不提供则不使用缓存）
             config: 运行器配置
         """
         self.tasks = tasks
         self._url = url
-        self._cache_url = cache_url or url
+        self._cache_url = cache_url
         self._queue_name = queue_name
         self.config = config or RunnerConfig()
 
@@ -109,7 +110,7 @@ class TaskRunner:
         self.num_workers = max(1, self.config.num_workers)
 
         # 核心组件（延迟初始化）
-        self._queue: Optional[TaskQueue] = None
+        self._queue: Optional[Queue] = None
         self._cache: Optional[Cache] = None
         self._limiter: Optional[RateLimiter] = None
         self._engine = None
@@ -143,70 +144,62 @@ class TaskRunner:
 
     async def _setup_queue(self):
         """设置队列"""
-        from ..storage.queue import RedisQueue, SQLiteQueue, PostgreSQLQueue
+        from ..common.queue import RedisQueue, SQLiteQueue, MemoryQueue
+        from ..common.pool import RedisPool, SQLitePool
 
         parsed = urlparse(self._url)
         scheme = parsed.scheme
 
         if scheme == "redis":
-            try:
-                import redis.asyncio as aioredis
-            except ImportError:
-                raise ImportError(
-                    "redis is required for redis:// URLs. "
-                    "Install it with: pip install 'flowmix[redis]'"
-                )
-
-            self._redis_conn = await aioredis.from_url(self._url, decode_responses=True)
-            self._queue = RedisQueue(redis=self._redis_conn, queue_name=self._queue_name)
+            # 获取 RedisPool 单例
+            pool = await RedisPool.get_instance(self._url)
+            self._queue = RedisQueue(pool=pool, queue_name=self._queue_name)
 
         elif scheme == "sqlite":
             # sqlite://path/to/db.db
             db_path = parsed.path.lstrip("/") if parsed.path else ".flowmix/flowmix.db"
-            self._queue = SQLiteQueue(db_path=db_path, queue_name=self._queue_name)
+            # 获取 SQLitePool 单例
+            pool = await SQLitePool.get_instance(db_path)
+            self._queue = SQLiteQueue(pool=pool, queue_name=self._queue_name)
 
-        elif scheme == "postgresql":
-            try:
-                import asyncpg
-            except ImportError:
-                raise ImportError(
-                    "asyncpg is required for postgresql:// URLs. "
-                    "Install it with: pip install 'flowmix[postgresql]'"
-                )
-
-            self._queue = PostgreSQLQueue(dsn=self._url, queue_name=self._queue_name)
+        elif scheme == "memory":
+            # 内存队列
+            self._queue = MemoryQueue(queue_name=self._queue_name)
 
         else:
-            raise ValueError(f"Unsupported URL scheme: {scheme}")
+            raise ValueError(
+                f"Unsupported URL scheme: {scheme}. Only 'redis://', 'sqlite://', and 'memory://' are supported."
+            )
 
     async def _setup_cache(self):
         """设置缓存"""
+        if self._cache_url is None:
+            # 不使用缓存
+            self._cache = None
+            return
+
+        from ..common.pool import RedisPool, SQLitePool
+
         parsed = urlparse(self._cache_url)
         scheme = parsed.scheme
 
-        if scheme == "redis":
-            try:
-                import redis.asyncio as aioredis
-            except ImportError:
-                raise ImportError(
-                    "redis is required for redis:// URLs. "
-                    "Install it with: pip install 'flowmix[redis]'"
-                )
 
-            # 如果 cache_url 和 url 相同，复用连接
-            if self._cache_url == self._url and self._redis_conn:
-                self._cache = RedisCache(redis=self._redis_conn, queue_name=self._queue_name)
-            else:
-                self._cache_redis_conn = await aioredis.from_url(self._cache_url, decode_responses=True)
-                self._cache = RedisCache(redis=self._cache_redis_conn, queue_name=self._queue_name)
+        if scheme == "redis":
+            # 获取 RedisPool 单例（可能复用队列的连接池）
+            pool = await RedisPool.get_instance(self._cache_url)
+            self._cache = RedisCache(pool=pool, queue_name=self._queue_name)
 
         elif scheme == "sqlite":
             # sqlite://path/to/db.db
             db_path = parsed.path.lstrip("/") if parsed.path else ".flowmix/flowmix.db"
-            self._cache = SQLiteCache(db_path=db_path, queue_name=self._queue_name)
+            # 获取 SQLitePool 单例（可能复用队列的连接池）
+            pool = await SQLitePool.get_instance(db_path)
+            self._cache = SQLiteCache(pool=pool, queue_name=self._queue_name)
 
         else:
-            raise ValueError(f"Unsupported cache URL scheme: {scheme}")
+            raise ValueError(
+                f"Unsupported cache URL scheme: {scheme}. Only 'redis://' and 'sqlite://' are supported."
+            )
 
     async def _setup_limiter(self):
         """设置限流器"""
@@ -233,16 +226,20 @@ class TaskRunner:
             if limiter_url == self._url and self._redis_conn:
                 # 复用队列的 Redis 连接
                 self._limiter = RedisRateLimiter(redis=self._redis_conn)
-            elif limiter_url == self._cache_url and self._cache_redis_conn:
+            elif self._cache_url and limiter_url == self._cache_url and self._cache_redis_conn:
                 # 复用缓存的 Redis 连接
                 self._limiter = RedisRateLimiter(redis=self._cache_redis_conn)
             else:
                 # 创建新的 Redis 连接
-                self._limiter_redis_conn = await aioredis.from_url(limiter_url, decode_responses=True)
+                self._limiter_redis_conn = await aioredis.from_url(
+                    limiter_url, decode_responses=True
+                )
                 self._limiter = RedisRateLimiter(redis=self._limiter_redis_conn)
 
         else:
-            raise ValueError(f"Unsupported limiter URL scheme: {scheme}. Only 'redis://' is supported.")
+            raise ValueError(
+                f"Unsupported limiter URL scheme: {scheme}. Only 'redis://' is supported."
+            )
 
     def _setup_task_callbacks(self):
         """为每个 Task 设置回调中使用的 producer"""
@@ -250,12 +247,7 @@ class TaskRunner:
         for task in self.tasks.values():
             task._producer = producer
 
-    async def run(
-        self,
-        auto_stop: bool = False,
-        check_interval: float = 0.5,
-        max_idle_time: float = 2.0
-    ):
+    async def run(self):
         """
         启动运行器
 
@@ -294,7 +286,7 @@ class TaskRunner:
             queue=self._queue,
             max_retries=self.config.max_retries,
             retry_delay=self.config.retry_delay,
-            stop_event=self._stop_event
+            stop_event=self._stop_event,
         )
 
         # 注册信号处理
@@ -304,48 +296,17 @@ class TaskRunner:
         except ValueError:
             pass
 
-        self.logger.info(f"TaskRunner {self.name} started with {self.num_workers} concurrent workers")
+        self.logger.info(
+            f"TaskRunner {self.name} started with {self.num_workers} concurrent workers"
+        )
 
         # 创建 worker 协程
         self._workers = [
-            asyncio.create_task(self._worker_loop(i))
-            for i in range(self.num_workers)
+            asyncio.create_task(self._worker_loop(i)) for i in range(self.num_workers)
         ]
 
         try:
-            if auto_stop:
-                # 自动停止模式：监控队列，直到为空
-                idle_start = None
-                while self.running:
-                    pending_count = await self._queue.get_pending_count()
-
-                    if pending_count == 0:
-                        # 队列为空，开始计时
-                        if idle_start is None:
-                            idle_start = asyncio.get_event_loop().time()
-                            self.logger.debug("Queue is empty, waiting for tasks to complete...")
-
-                        # 检查是否已经空闲足够长时间
-                        idle_duration = asyncio.get_event_loop().time() - idle_start
-                        if idle_duration >= max_idle_time:
-                            self.logger.info(f"Queue empty for {idle_duration:.1f}s, stopping workers")
-                            break
-                    else:
-                        # 队列不为空，重置计时
-                        idle_start = None
-
-                    await asyncio.sleep(check_interval)
-
-                # 停止所有 worker
-                self.running = False
-                self._stop_event.set()
-                for w in self._workers:
-                    w.cancel()
-                await asyncio.gather(*self._workers, return_exceptions=True)
-            else:
-                # 持续运行模式：等待所有 worker 协程完成（通常是收到停止信号后）
-                await asyncio.gather(*self._workers, return_exceptions=True)
-
+            await asyncio.gather(*self._workers, return_exceptions=True)
         except Exception as e:
             self.logger.error(f"TaskRunner error: {e}", exc_info=True)
             self.running = False
@@ -368,7 +329,7 @@ class TaskRunner:
                 try:
                     msg = await asyncio.wait_for(
                         self._queue.pop(worker_name),
-                        timeout=0.5  # 500ms 超时，让停止信号能及时响应
+                        timeout=0.5,  # 500ms 超时，让停止信号能及时响应
                     )
                 except asyncio.TimeoutError:
                     # 超时后检查停止信号
@@ -386,7 +347,9 @@ class TaskRunner:
 
                 # 处理消息前再次检查停止信号
                 if self._stop_event.is_set():
-                    self.logger.info(f"Worker {worker_name} stopping, message {msg['id']} will be requeued")
+                    self.logger.info(
+                        f"Worker {worker_name} stopping, message {msg['id']} will be requeued"
+                    )
                     break
 
                 # 处理消息
@@ -397,8 +360,7 @@ class TaskRunner:
                 break
             except Exception as e:
                 self.logger.error(
-                    f"Worker {worker_name} processing error: {e}",
-                    exc_info=True
+                    f"Worker {worker_name} processing error: {e}", exc_info=True
                 )
                 # 继续处理下一条消息
                 continue
@@ -423,9 +385,7 @@ class TaskRunner:
                 f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
             )
             await self._queue.ack(
-                msg_id,
-                failed=True,
-                error=f"Task '{task_name}' not found"
+                msg_id, failed=True, error=f"Task '{task_name}' not found"
             )
             return
 
@@ -438,7 +398,7 @@ class TaskRunner:
             failed=(status == "failed"),
             error=result.get("error") if status == "failed" else None,
             result=result.get("data") if status in ("success", "cached") else None,
-            fingerprint=result.get("fingerprint")
+            fingerprint=result.get("fingerprint"),
         )
 
     def _signal_stop(self, signum, _):
@@ -460,6 +420,7 @@ class TaskRunner:
                     w.cancel()
             # 直接退出
             import sys
+
             sys.exit(1)
 
     async def _cleanup(self):

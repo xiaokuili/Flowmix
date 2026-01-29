@@ -36,10 +36,9 @@ Example:
     await runner.run()
 """
 
-from .task import Task
-from .pub import Pub
-from .runner import TaskRunner, RunnerConfig
-from .scheduler import Scheduler
+from .runner.task import Task
+from .sender.pub import Pub
+from .runner.runner import TaskRunner, RunnerConfig
 
 # 限流器（兼容旧 API）
 from .runner.limit import (
@@ -49,14 +48,11 @@ from .runner.limit import (
     ConcurrencyLimiter  # 别名，向后兼容
 )
 
-# 存储层相关
-from .storage import TaskQueue, Cache, TaskStats
-
-# 可选：导出 storage 包（用于自定义后端）
+# 统计模块
 try:
-    from . import storage
+    from .stats import TaskStats
 except ImportError:
-    storage = None
+    TaskStats = None
 
 __all__ = [
     # 核心 API
@@ -64,10 +60,6 @@ __all__ = [
     "Pub",
     "TaskRunner",
     "RunnerConfig",
-    "TaskQueue",
-    "Cache",
-    "TaskStats",
-    "Scheduler",
 
     # 限流器
     "RateLimiter",
@@ -75,8 +67,8 @@ __all__ = [
     "RedisRateLimiter",
     "ConcurrencyLimiter",  # 向后兼容
 
-    # 存储层相关
-    "storage",
+    # 统计
+    "TaskStats",
 ]
 
 __version__ = "0.5.3"
