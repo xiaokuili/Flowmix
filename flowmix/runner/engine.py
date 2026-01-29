@@ -148,6 +148,8 @@ class TaskEngine:
                     fingerprint = None
                     if task.dedup and self._cache:
                         fingerprint = self._cache.generate_fingerprint(task_name, task_data)
+                        # 保存结果到缓存
+                        await self._cache.set(task_name, task_data, result)
 
                     self.logger.info(f"[{worker_name}] Task '{task_name}' {msg_id} completed successfully")
                     return {"data": result, "fingerprint": fingerprint}, "success"

@@ -162,6 +162,48 @@ class RedisCache(Cache):
             self.logger.debug(f"Cache miss for task '{task_name}' (fingerprint={fingerprint[:8]}...)")
             return None
 
+    async def set(
+        self,
+        task_name: str,
+        data: Dict[str, Any],
+        result: Any
+    ):
+        """
+        设置缓存（保存任务执行结果）
+
+        Args:
+            task_name: 任务名称
+            data: 任务数据
+            result: 任务执行结果
+
+        Example:
+            await cache.set("crawl", {"url": "http://example.com"}, {"title": "Example"})
+        """
+        import time
+
+        fingerprint = self.generate_fingerprint(task_name, data)
+
+        # 构造缓存消息
+        message = {
+            "id": f"cache_{fingerprint[:16]}",  # 使用 fingerprint 前缀作为 msg_id
+            "task_name": task_name,
+            "data": data,
+            "status": "completed",
+            "fingerprint": fingerprint,
+            "completed_at": time.time(),
+            "result": json.dumps(result) if not isinstance(result, str) else result,
+        }
+
+        # 保存到 Redis
+        async with self._pool.acquire() as redis:
+            await redis.hset(
+                self._get_key("messages"),
+                message["id"],
+                json.dumps(message)
+            )
+
+        self.logger.debug(f"Cache set for task '{task_name}' (fingerprint={fingerprint[:8]}...)")
+
     async def close(self):
         """
         关闭缓存（释放资源）

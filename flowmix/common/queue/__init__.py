@@ -10,12 +10,10 @@ Queue - 队列模块
 
 from .base import Queue
 from .redis import RedisQueue
-from .sqlite import SQLiteQueue
 from .memory import MemoryQueue
 
 __all__ = [
     "Queue",
     "RedisQueue",
-    "SQLiteQueue",
     "MemoryQueue",
 ]

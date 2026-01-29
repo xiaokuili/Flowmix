@@ -5,11 +5,11 @@ Cache - 缓存模块
 """
 
 from .base import Cache
+from .memory import MemoryCache
 from .redis import RedisCache
-from .sqlite import SQLiteCache
 
 __all__ = [
     'Cache',
+    'MemoryCache',
     'RedisCache',
-    'SQLiteCache',
 ]

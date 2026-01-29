@@ -8,10 +8,11 @@
 """
 
 import asyncio
+from datetime import datetime
 from flowmix import Task, TaskRunner, RunnerConfig
 from flowmix.common.queue import MemoryQueue
 from flowmix.sender import Pub
-
+import time 
 
 # 1. 定义 Task
 process_task = Task(name='process')
@@ -22,14 +23,16 @@ async def execute_process(data):
     """执行处理任务（模拟耗时操作）"""
     message = data.get('message', 'Task')
     duration = data.get('duration', 2)
-    worker_id = data.get('worker_id', '?')
 
-    print(f"🔄 [Worker {worker_id}] 开始处理: {message} (预计耗时 {duration}s)")
+    start_time = datetime.now()
+    print(f"🔄 [Worker {message}] 开始处理: {message} (预计耗时 {duration}s) - {start_time.strftime('%H:%M:%S.%f')[:-3]}")
 
     # 模拟耗时操作
     await asyncio.sleep(duration)
 
-    print(f"✅ [Worker {worker_id}] 完成: {message}")
+    end_time = datetime.now()
+    actual_duration = (end_time - start_time).total_seconds()
+    print(f"✅ [Worker {message}] 完成: {message} (实际耗时 {actual_duration:.2f}s) - {end_time.strftime('%H:%M:%S.%f')[:-3]}")
     return {"status": "ok", "message": message, "duration": duration}
 
 
@@ -79,7 +82,7 @@ async def main():
         )
         print(f"  ✓ 推送任务 #{task_id}: {task_data['message']} (耗时 {task_data['duration']}s)")
 
-    print(f"\n  总计推送 {len(tasks)} 个任务")
+    print(f"\n  总计推送 {len(tasks)} 个任务，串行需要处理24s")
 
     # 3. 执行任务（使用多个并发 worker）
     print("\n" + "="*60)

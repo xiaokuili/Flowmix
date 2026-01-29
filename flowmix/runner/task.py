@@ -241,7 +241,7 @@ class Task:
 
         # 立即提交到队列（如果在 execute 中，自动关联父任务）
         parent_id = self._current_msg_id
-        await self._producer.push(data=data, task_name=task_name, priority=priority, parent_id=parent_id)
+        await self._sender.push(data=data, task_name=task_name, priority=priority, parent_id=parent_id)
 
     async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """

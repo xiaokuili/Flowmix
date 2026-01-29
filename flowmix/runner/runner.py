@@ -21,7 +21,6 @@ from .task import Task
 from ..common.queue import Queue
 from .cache.base import Cache
 from .cache.redis import RedisCache
-from .cache.sqlite import SQLiteCache
 from .limit.base import RateLimiter
 from .limit.memory import MemoryRateLimiter
 from .limit.redis import RedisRateLimiter
@@ -94,7 +93,7 @@ class TaskRunner:
 
         Args:
             tasks: 任务字典 {task_name: Task}
-            url: 队列 URL（支持 redis://, sqlite://, postgresql://）
+            url: 队列 URL（支持 redis://, postgresql://）
             queue_name: 队列名称
             cache_url: 缓存 URL（可选，如果不提供则不使用缓存）
             config: 运行器配置
@@ -144,8 +143,8 @@ class TaskRunner:
 
     async def _setup_queue(self):
         """设置队列"""
-        from ..common.queue import RedisQueue, SQLiteQueue, MemoryQueue
-        from ..common.pool import RedisPool, SQLitePool
+        from ..common.queue import RedisQueue, MemoryQueue
+        from ..common.pool import RedisPool
 
         parsed = urlparse(self._url)
         scheme = parsed.scheme
@@ -155,13 +154,7 @@ class TaskRunner:
             pool = await RedisPool.get_instance(self._url)
             self._queue = RedisQueue(pool=pool, queue_name=self._queue_name)
 
-        elif scheme == "sqlite":
-            # sqlite://path/to/db.db
-            db_path = parsed.path.lstrip("/") if parsed.path else ".flowmix/flowmix.db"
-            # 获取 SQLitePool 单例
-            pool = await SQLitePool.get_instance(db_path)
-            self._queue = SQLiteQueue(pool=pool, queue_name=self._queue_name)
-
+    
         elif scheme == "memory":
             # 内存队列
             self._queue = MemoryQueue(queue_name=self._queue_name)
@@ -189,16 +182,14 @@ class TaskRunner:
             pool = await RedisPool.get_instance(self._cache_url)
             self._cache = RedisCache(pool=pool, queue_name=self._queue_name)
 
-        elif scheme == "sqlite":
-            # sqlite://path/to/db.db
-            db_path = parsed.path.lstrip("/") if parsed.path else ".flowmix/flowmix.db"
-            # 获取 SQLitePool 单例（可能复用队列的连接池）
-            pool = await SQLitePool.get_instance(db_path)
-            self._cache = SQLiteCache(pool=pool, queue_name=self._queue_name)
+        elif scheme == "memory":
+            # 内存缓存
+            from .cache.memory import MemoryCache
+            self._cache = MemoryCache()
 
         else:
             raise ValueError(
-                f"Unsupported cache URL scheme: {scheme}. Only 'redis://' and 'sqlite://' are supported."
+                f"Unsupported cache URL scheme: {scheme}. Only 'redis://', 'memory://' are supported."
             )
 
     async def _setup_limiter(self):
@@ -245,7 +236,7 @@ class TaskRunner:
         """为每个 Task 设置回调中使用的 producer"""
         producer = Pub(self._queue)
         for task in self.tasks.values():
-            task._producer = producer
+            task._sender = producer  # 设置 _sender 以支持 callback()
 
     async def run(self):
         """
@@ -255,11 +246,7 @@ class TaskRunner:
         适用于生产环境、长期运行的后台服务
 
         Args:
-            auto_stop: 是否自动停止（默认 False）
-                      - False: 持续运行，直到收到停止信号（适合生产环境）
-                      - True: 队列为空后自动停止（适合测试、批处理任务）
-            check_interval: 检查队列的时间间隔（秒），仅在 auto_stop=True 时使用
-            max_idle_time: 队列为空后等待的最大时间（秒），仅在 auto_stop=True 时使用
+            
 
         Example:
             # 生产环境：持续运行

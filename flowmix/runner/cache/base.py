@@ -64,6 +64,26 @@ class Cache(ABC):
         pass
 
     @abstractmethod
+    async def set(
+        self,
+        task_name: str,
+        data: Dict[str, Any],
+        result: Any
+    ):
+        """
+        设置缓存（保存任务执行结果）
+
+        Args:
+            task_name: 任务名称
+            data: 任务数据
+            result: 任务执行结果
+
+        Example:
+            await cache.set("crawl", {"url": "http://example.com"}, {"title": "Example"})
+        """
+        pass
+
+    @abstractmethod
     async def close(self):
         """关闭连接或释放资源"""
         pass
