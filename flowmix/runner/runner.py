@@ -40,7 +40,7 @@ class RunnerConfig:
         name: 运行器名称（默认自动生成）
         limiter_url: 限流器 URL（默认为 None，使用内存限流器）
                      - None: 使用 MemoryRateLimiter（基于内存，单机）
-                     - redis://...: 使用 RedisRateLimiter（基于 Redis，分布式）
+                     - redis://... 或 rediss://...: 使用 RedisRateLimiter（基于 Redis，分布式）
     """
 
     num_workers: int = 1
@@ -94,9 +94,9 @@ class TaskRunner:
 
         Args:
             tasks: 任务字典 {task_name: Task}
-            url: 队列 URL（支持 redis://, postgresql://）
+            url: 队列 URL（支持 redis://, rediss://, postgresql://）
             queue_name: 队列名称
-            cache_url: 缓存 URL（可选，如果不提供则不使用缓存）
+            cache_url: 缓存 URL（可选，如果不提供则不使用缓存，支持 redis://, rediss://）
             cache: 缓存实例（可选，如果提供则直接使用，优先级高于 cache_url）
             config: 运行器配置
         """
@@ -152,19 +152,19 @@ class TaskRunner:
         parsed = urlparse(self._url)
         scheme = parsed.scheme
 
-        if scheme == "redis":
+        if scheme in ("redis", "rediss"):
             # 获取 RedisPool 单例
             pool = await RedisPool.get_instance(self._url)
             self._queue = RedisQueue(pool=pool, queue_name=self._queue_name)
 
-    
+
         elif scheme == "memory":
             # 内存队列
             self._queue = MemoryQueue(queue_name=self._queue_name)
 
         else:
             raise ValueError(
-                f"Unsupported URL scheme: {scheme}. Only 'redis://', 'sqlite://', and 'memory://' are supported."
+                f"Unsupported URL scheme: {scheme}. Only 'redis://', 'rediss://', 'sqlite://', and 'memory://' are supported."
             )
 
     async def _setup_cache(self):
@@ -185,7 +185,7 @@ class TaskRunner:
         scheme = parsed.scheme
 
 
-        if scheme == "redis":
+        if scheme in ("redis", "rediss"):
             # 获取 RedisPool 单例（可能复用队列的连接池）
             pool = await RedisPool.get_instance(self._cache_url)
             self._cache = RedisCache(pool=pool, queue_name=self._queue_name)
@@ -197,7 +197,7 @@ class TaskRunner:
 
         else:
             raise ValueError(
-                f"Unsupported cache URL scheme: {scheme}. Only 'redis://', 'memory://' are supported."
+                f"Unsupported cache URL scheme: {scheme}. Only 'redis://', 'rediss://', 'memory://' are supported."
             )
 
     async def _setup_limiter(self):
@@ -212,12 +212,12 @@ class TaskRunner:
         parsed = urlparse(limiter_url)
         scheme = parsed.scheme
 
-        if scheme == "redis":
+        if scheme in ("redis", "rediss"):
             try:
                 import redis.asyncio as aioredis
             except ImportError:
                 raise ImportError(
-                    "redis is required for redis:// URLs. "
+                    "redis is required for redis:// or rediss:// URLs. "
                     "Install it with: pip install 'flowmix[redis]'"
                 )
 
@@ -237,7 +237,7 @@ class TaskRunner:
 
         else:
             raise ValueError(
-                f"Unsupported limiter URL scheme: {scheme}. Only 'redis://' is supported."
+                f"Unsupported limiter URL scheme: {scheme}. Only 'redis://' and 'rediss://' are supported."
             )
 
     def _setup_task_callbacks(self):

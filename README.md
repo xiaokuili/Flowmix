@@ -22,3 +22,8 @@ pip install git+https://github.com/xiaokuili/Flowmix.git@v0.3.0
 pip install --force-reinstall git+https://github.com/xiaokuili/Flowmix.git@v0.5.0
 ```
 
+
+# Feature 
+1. Task友好接口，减轻开发难度  
+2. 支持并发，retry，cache， limit控制 
+3. 支持状态查询 

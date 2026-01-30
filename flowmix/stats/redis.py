@@ -516,6 +516,8 @@ class RedisStats(Stats):
     Example:
         # 使用 Redis URL 初始化
         stats = RedisStats(redis_url="redis://localhost:6379/0", queue_name="tasks")
+        # 或使用 SSL/TLS 连接
+        # stats = RedisStats(redis_url="rediss://localhost:6380/0", queue_name="tasks")
 
         # 任务链查询
         task = await stats.task.get_task(123)
@@ -547,7 +549,7 @@ class RedisStats(Stats):
         初始化 RedisStats
 
         Args:
-            redis_url: Redis 连接 URL（如: redis://localhost:6379/0）
+            redis_url: Redis 连接 URL（如: redis://localhost:6379/0 或 rediss://localhost:6380/0）
             queue_name: 队列名称（默认: tasks）
         """
         if not redis_url:
