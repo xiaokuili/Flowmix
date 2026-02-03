@@ -13,7 +13,6 @@ import time
 from datetime import datetime, timedelta
 from flowmix import Task, TaskRunner, RunnerConfig
 from flowmix.sender import Cron
-from flowmix.common.queue import MemoryQueue
 
 
 # 1. 定义任务
@@ -80,15 +79,13 @@ async def main():
 
     # 创建内存队列
     queue_name = "cron_tasks"
-    queue = MemoryQueue(queue_name=queue_name)
-    await queue.clear_all()
 
     print("\n" + "="*70)
     print("🕐 Flowmix Cron 定时任务示例")
     print("="*70)
 
-    # 3. 创建 Cron 调度器
-    cron = Cron(queue=queue)
+    # 3. 创建 Cron 调度器（自动创建队列）
+    cron = await Cron.create(url="memory://", queue_name=queue_name)
 
     print("\n📋 配置定时任务...")
     print("-"*70)

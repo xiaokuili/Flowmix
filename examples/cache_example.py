@@ -10,7 +10,6 @@ Cache 缓存示例 - Flowmix 任务去重和结果缓存
 
 import asyncio
 from flowmix import Task, TaskRunner, RunnerConfig
-from flowmix.common.queue import MemoryQueue
 from flowmix.runner.cache import MemoryCache
 from flowmix.sender import Pub
 
@@ -60,7 +59,6 @@ async def main():
 
     # 创建内存队列
     queue_name = "cache_tasks"
-    queue = MemoryQueue(queue_name=queue_name)
 
     # 创建内存缓存
     cache = MemoryCache()
@@ -73,7 +71,8 @@ async def main():
     print("\n📤 推送任务到队列...")
     print("-"*70)
 
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name=queue_name)
 
     urls = [
         "http://example.com/page1",

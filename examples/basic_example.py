@@ -10,7 +10,6 @@
 import asyncio
 from flowmix import Task, TaskRunner, RunnerConfig
 from flowmix.sender import Pub
-from flowmix.common.queue import MemoryQueue
 
 
 # 1. 定义 Task
@@ -41,16 +40,13 @@ async def main():
     """主函数"""
     queue_name = "tasks"
 
-    # 创建队列（指定 queue_name，与 TaskRunner 保持一致）
-    queue = MemoryQueue(queue_name=queue_name)
-    await queue.clear_all()
-
     # 2. 推送任务
     print("\n" + "="*50)
     print("📤 推送任务到队列...")
     print("="*50)
 
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name=queue_name)
 
     # 推送多个任务
     messages = [

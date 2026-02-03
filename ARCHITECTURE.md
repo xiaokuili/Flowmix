@@ -94,8 +94,16 @@ config = RunnerConfig(
 
 **使用方式**:
 ```python
+# 推荐方式：使用 URL（自动创建队列）
+pub = await Pub.create(url="redis://localhost:6379/0", queue_name="tasks")
+
+# 高级用法：直接传入 Queue 实例
+from flowmix.common.queue import RedisQueue, RedisPool
+pool = await RedisPool.get_instance("redis://localhost:6379/0")
+queue = RedisQueue(pool=pool, queue_name="tasks")
 pub = Pub(queue=queue)
 
+# 推送任务
 task_id = await pub.push(
     data={"key": "value"},
     task_name="process",
@@ -479,7 +487,8 @@ async def call_api(data):
 
 **示例**:
 ```python
-cron = Cron(queue=queue)
+# 推荐方式：使用 URL
+cron = await Cron.create(url="redis://localhost:6379/0", queue_name="tasks")
 
 # 每小时执行
 cron.add_interval(

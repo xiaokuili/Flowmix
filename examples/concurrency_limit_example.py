@@ -18,7 +18,6 @@ import asyncio
 import time
 from datetime import datetime
 from flowmix import Task, TaskRunner, RunnerConfig
-from flowmix.common.queue import MemoryQueue
 from flowmix.sender import Pub
 
 
@@ -56,9 +55,8 @@ async def run_without_limit():
 
         return {"id": req_id, "status": "success"}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="no_limit")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="no_limit")
 
     # 推送 20 个任务
     for i in range(20):
@@ -126,9 +124,8 @@ async def run_with_limit():
 
         return {"id": req_id, "status": "success"}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="with_limit")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="with_limit")
 
     # 推送 20 个任务
     for i in range(20):
@@ -215,9 +212,8 @@ async def run_openai_simulation():
             "response": f"Generated response for: {prompt}"
         }
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="openai_sim")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="openai_sim")
 
     # 推送 10 个任务
     prompts = [
@@ -299,9 +295,8 @@ async def run_crawler_with_limit():
 
         return {"id": page_id, "content": f"Content from {url}"}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="crawler")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="crawler")
 
     # 推送 15 个页面
     for i in range(15):

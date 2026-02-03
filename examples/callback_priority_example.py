@@ -13,7 +13,6 @@ Priority 策略：
 
 import asyncio
 from flowmix import Task, TaskRunner, RunnerConfig
-from flowmix.common.queue import MemoryQueue
 from flowmix.sender import Pub
 
 
@@ -56,9 +55,8 @@ async def run_crawler_dfs():
 
         return {"url": url, "depth": depth}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="crawl_dfs")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="crawl_dfs")
 
     # 推送根任务
     await pub.push(
@@ -118,9 +116,8 @@ async def run_crawler_bfs():
 
         return {"url": url, "depth": depth}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="crawl_bfs")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="crawl_bfs")
 
     # 推送根任务
     await pub.push(
@@ -184,9 +181,8 @@ async def run_task_decomposition():
 
         return {"id": task_id, "level": level}
 
-    # 创建队列和 Runner
-    queue = MemoryQueue(queue_name="work_tree")
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name="work_tree")
 
     # 推送根任务
     await pub.push(

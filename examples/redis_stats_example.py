@@ -12,7 +12,6 @@ Redis Stats 完整示例 - 展示如何使用 RedisStats 进行任务统计和�
 import asyncio
 import redis.asyncio as aioredis
 from flowmix import Task, TaskRunner, RunnerConfig
-from flowmix.common.queue import RedisQueue
 from flowmix.sender import Pub
 from flowmix.stats import RedisStats
 from datetime import datetime
@@ -311,16 +310,17 @@ async def main():
     print("🎯 Redis Stats 完整示例")
     print("="*80)
 
-    # 1. 创建 Redis 连接
-    print("\n正在连接 Redis...")
-    redis = await aioredis.from_url("redis://localhost:6379/0", decode_responses=True)
-    print("✓ Redis 连接成功")
-
+    # 1. Redis URL
+    redis_url = "redis://localhost:6379/0"
     queue_name = "demo_tasks"
 
-    # 2. 创建 RedisQueue 和 Pub
-    queue = RedisQueue(redis=redis, queue_name=queue_name)
-    pub = Pub(queue=queue)
+    # 2. 创建 Redis 连接（用于 RedisStats）
+    print("\n正在连接 Redis...")
+    redis = await aioredis.from_url(redis_url, decode_responses=True)
+    print("✓ Redis 连接成功")
+
+    # 3. 创建 Pub（自动创建 Redis 连接和队列）
+    pub = await Pub.create(url=redis_url, queue_name=queue_name)
 
     # 3. 推送任务
     task_ids = await push_tasks(pub)

@@ -10,7 +10,6 @@
 import asyncio
 from datetime import datetime
 from flowmix import Task, TaskRunner, RunnerConfig
-from flowmix.common.queue import MemoryQueue
 from flowmix.sender import Pub
 import time 
 
@@ -52,14 +51,14 @@ async def main():
     """主函数"""
     # 创建内存队列
     queue_name = "tasks"
-    queue = MemoryQueue(queue_name=queue_name)
 
     # 2. 推送任务
     print("\n" + "="*60)
     print("📤 推送任务到队列...")
     print("="*60)
 
-    pub = Pub(queue=queue)
+    # 创建发布器（自动创建队列）
+    pub = await Pub.create(url="memory://", queue_name=queue_name)
 
     # 推送多个任务（不同的耗时时间）
     tasks = [

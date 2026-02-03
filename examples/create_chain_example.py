@@ -11,8 +11,6 @@
 import asyncio
 from flowmix import Task, TaskRunner, RunnerConfig
 from flowmix.sender import Pub
-from flowmix.common.queue import RedisQueue
-from flowmix.common.pool import RedisPool
 
 
 # 创建任务
@@ -78,21 +76,13 @@ async def main():
     print(f"📍 Queue: {queue_name}")
     print("=" * 70)
 
-    # 创建 Redis 连接池
+    # 创建发布器（自动创建 Redis 连接）
     print("\n🔌 连接 Redis...")
-    pool = await RedisPool.get_instance(redis_url=redis_url)
+    pub = await Pub.create(url=redis_url, queue_name=queue_name)
     print("✓ Redis 连接成功")
-
-    # 创建队列
-    queue = RedisQueue(pool=pool, queue_name=queue_name)
-
-    # 清空旧数据（可选）
-    print("\n🧹 清空旧数据...")
-    await queue.clear_all()
 
     # 推送根任务
     print("\n📤 推送根任务...")
-    pub = Pub(queue=queue)
     root_task_id = await pub.push(
         data={'id': 'ROOT', 'level': 0, 'max_level': 2},
         task_name='process'
