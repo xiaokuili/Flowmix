@@ -2,12 +2,21 @@
 Task - 任务定义
 
 通过装饰器注册执行函数和钩子函数
+
+为 AI 理解的关键点:
+1. Task 是任务定义（静态），TaskRunner 是执行引擎（动态）
+2. _sender 和 _current_msg_id 由 TaskRunner 在运行时注入
+3. callback() 只能在任务执行期间调用（依赖注入的状态）
+4. 数据必须是可 JSON 序列化的字典
 """
 
 import hashlib
 import inspect
 import json
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..sender.pub import Pub
 
 
 class Task:
@@ -99,6 +108,14 @@ class Task:
 
             # API 调用：1小时内复用结果
             api_task = Task(name='fetch_user', dedup=True, dedup_ttl=3600)
+
+            # 并发控制：每秒最多 10 个并发
+            api_task = Task(name='api_call', concurrency_limit=10)
+
+        AI 注意事项:
+            - Task 只是定义，不会自动执行
+            - 必须由 TaskRunner 驱动才能执行
+            - name 必须在 TaskRunner 的 tasks 字典中注册
         """
         self.name = name
         self.concurrency_limit = concurrency_limit
@@ -107,10 +124,11 @@ class Task:
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
-        # Producer 引用（由 Consumer 设置，用于 callback 立即提交任务）
-        self._sender: Optional[Any] = None
-        # 当前执行的消息 ID（用于自动关联 parent_id）
-        self._current_msg_id: Optional[int] = None
+
+        # 运行时依赖（由 TaskRunner 注入）
+        # AI 注意: 这些属性不是初始化参数，而是运行时依赖
+        self._sender: Optional["Pub"] = None  # TaskRunner._setup_task_callbacks() 注入
+        self._current_msg_id: Optional[int] = None  # TaskEngine.execute() 执行时设置
 
     def execute(self, func: Callable[[dict], Any]) -> Callable:
         """
@@ -194,32 +212,44 @@ class Task:
         self._on_failure_func = func
         return func
 
-    async def callback(self, task_name: str, data: dict, priority: int = 0):
+    async def callback(
+        self,
+        task_name: str,
+        data: dict[str, Any],
+        priority: int = 0
+    ) -> int:
         """
-        立即提交任务到队列（可在任何地方使用）
+        立即提交任务到队列（动态任务提交）
 
-        在 execute()、on_success()、on_failure() 或外部任意位置调用此方法，
-        任务会立即提交到队列。如果在 execute() 执行期间调用，会自动关联
-        parent_id 为当前任务的 msg_id。
+        此方法依赖运行时注入的 _sender 和 _current_msg_id，
+        只能在 TaskRunner 执行任务时调用。
+
+        运行时依赖:
+        - self._sender: 由 TaskRunner._setup_task_callbacks() 注入
+        - self._current_msg_id: 由 TaskEngine.execute() 设置
 
         Args:
-            task_name: 要回调的任务名称（Worker 会根据此名称路由到对应的 Task）
-            data: 任务数据（字典）
-            priority: 优先级（默认 0，数字越大越优先）
-                     - 高优先级 -> 深度优先（DFS）
-                     - 低优先级 -> 广度优先（BFS）
+            task_name: 要回调的任务名称（必须在 TaskRunner 中注册）
+            data: 任务数据（必须是可 JSON 序列化的字典）
+            priority: 优先级（0-100，数字越大越优先）
+                     - priority >= 10: 深度优先（DFS），适合递归处理
+                     - priority < 10: 广度优先（BFS），适合批处理
+
+        Returns:
+            任务 ID
 
         Raises:
-            RuntimeError: 如果 Task 未关联到 Worker
+            RuntimeError: 如果 Task 未关联到 Runner（_sender 为 None）
+            ValueError: 如果 data 不是可 JSON 序列化的字典
 
         Example:
             # 在 execute 中使用（自动关联父任务）
             @task.execute
-            def crawl(data):
+            async def crawl(data):
                 html = fetch(data['url'])
                 links = parse_links(html)
 
-                # 立即提交子任务
+                # 立即提交子任务（DFS）
                 for link in links:
                     await task.callback('crawl', {'url': link}, priority=10)
 
@@ -230,18 +260,32 @@ class Task:
             async def on_success(data, result):
                 await task.callback('analyze', {'html': result})
 
-            # 在外部使用
-            await task.callback('crawl', {'url': 'http://example.com'})
+        AI 注意事项:
+            - 不要在任务外部调用此方法（会抛出 RuntimeError）
+            - parent_id 自动设置为当前任务的 msg_id
+            - data 必须是字典，不能是其他类型
+            - task_name 必须在 TaskRunner 的 tasks 字典中已注册
         """
         if not self._sender:
             raise RuntimeError(
                 f"Task '{self.name}' is not attached to a Runner. "
-                "Please create a TaskRunner instance with this task first."
+                "Please create a TaskRunner instance with this task first. "
+                "This method can only be called during task execution."
             )
 
-        # 立即提交到队列（如果在 execute 中，自动关联父任务）
+        # 验证 data 是字典
+        if not isinstance(data, dict):
+            raise ValueError(f"data must be a dict, got {type(data)}")
+
+        # 立即提交到队列
+        # parent_id 自动关联当前任务（如果在执行期间）
         parent_id = self._current_msg_id
-        await self._sender.push(data=data, task_name=task_name, priority=priority, parent_id=parent_id)
+        return await self._sender.push(
+            data=data,
+            task_name=task_name,
+            priority=priority,
+            parent_id=parent_id
+        )
 
     async def run(self, data: dict, msg_id: Optional[int] = None) -> Any:
         """

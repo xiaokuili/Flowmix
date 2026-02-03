@@ -68,6 +68,10 @@ class RedisQueue(Queue):
         """生成 Redis key"""
         return f"{self.queue_name}:{suffix}"
 
+    def _get_children_key(self, parent_id: int) -> str:
+        """生成父任务的子任务索引 key"""
+        return f"{self.queue_name}:children:{parent_id}"
+
     async def push(
         self,
         data: Dict[str, Any],
@@ -106,7 +110,11 @@ class RedisQueue(Queue):
                 {str(msg_id): -priority * 1e10 + msg_id}
             )
 
-            logger.debug(f"Pushed message {msg_id} (task_name={task_name}, priority={priority})")
+            # 维护父子关系索引：如果有父任务，添加到父任务的子任务集合
+            if parent_id:
+                await redis.sadd(self._get_children_key(parent_id), msg_id)
+
+            logger.debug(f"Pushed message {msg_id} (task_name={task_name}, priority={priority}, parent_id={parent_id})")
             return msg_id
 
     async def pop(self, consumer_name: str) -> Optional[Dict[str, Any]]:
@@ -198,20 +206,15 @@ class RedisQueue(Queue):
         """
         更新任务（及其父任务）的 chain_status
 
+        优化：使用父子关系索引，避免 HGETALL 获取所有消息
+
         当任务本身是 'completed' 或 'failed' 状态时：
         1. 如果任务没有子任务，更新其 chain_status 为 'completed'
         2. 如果有父任务，检查父任务是否应该更新 chain_status
         """
-        # 1. 更新任务本身的 chain_status（如果它是叶子任务）
-        all_messages = await redis.hgetall(self._get_key("messages"))
-
-        # 检查是否有子任务
-        has_children = False
-        for _, msg_json in all_messages.items():
-            msg = json.loads(msg_json)
-            if msg.get("parent_id") == task_id:
-                has_children = True
-                break
+        # 1. 检查是否有子任务（使用索引，O(1)）
+        children = await redis.smembers(self._get_children_key(task_id))
+        has_children = len(children) > 0
 
         if not has_children:
             # 叶子任务，更新其 chain_status 为 'completed'
@@ -230,37 +233,47 @@ class RedisQueue(Queue):
 
         # 2. 如果有父任务，递归检查并更新父任务的 chain_status
         if parent_id:
-            await self._update_parent_chain_status(redis, parent_id, all_messages)
+            await self._update_parent_chain_status(redis, parent_id)
 
-    async def _update_parent_chain_status(self, redis, parent_id: int, all_messages: Dict):
+    async def _update_parent_chain_status(self, redis, parent_id: int):
         """
         更新父任务的 chain_status（内部方法）
+
+        优化：使用父子关系索引，只获取直接子任务
         """
         # 获取父任务
-        parent_json = all_messages.get(str(parent_id))
-        if not parent_json:
-            parent_json = await redis.hget(self._get_key("messages"), parent_id)
+        parent_json = await redis.hget(self._get_key("messages"), parent_id)
         if not parent_json:
             return
 
-        parent_message = json.loads(parent_json) if isinstance(parent_json, str) else parent_json
+        parent_message = json.loads(parent_json)
 
         if parent_message.get("status") not in ("completed", "failed"):
             return  # 父任务状态不是 completed/failed，无需更新
         if parent_message.get("chain_status") == "completed":
             return  # 已经是 completed，无需重复更新
 
-        # 检查父任务的子任务
-        total_children = 0
-        has_pending = False
+        # 使用索引获取所有子任务 ID（O(1)）
+        child_ids = await redis.smembers(self._get_children_key(parent_id))
 
-        for _, msg_json in all_messages.items():
-            msg = json.loads(msg_json)
-            if msg.get("parent_id") == parent_id:
-                total_children += 1
-                # 检查子任务是否完成
-                child_status = msg.get("status")
-                child_chain_status = msg.get("chain_status", "pending")
+        if not child_ids:
+            # 没有子任务，chain_status 跟随 status
+            new_chain_status = "completed"
+        else:
+            # 批量获取子任务状态（O(k)，k = 子任务数）
+            child_messages_json = await redis.hmget(
+                self._get_key("messages"),
+                *[int(cid) for cid in child_ids]
+            )
+
+            # 检查是否所有子任务都已完成
+            has_pending = False
+            for child_json in child_messages_json:
+                if not child_json:
+                    continue
+                child = json.loads(child_json)
+                child_status = child.get("status")
+                child_chain_status = child.get("chain_status", "pending")
 
                 # 只有子任务真正完成时才算（status 完成或 chain_status 完成）
                 is_child_finished = (
@@ -275,20 +288,10 @@ class RedisQueue(Queue):
                     has_pending = True
                     break
 
-        # 判断父任务的 chain_status
-        new_chain_status = None
-        if total_children == 0:
-            # 没有子任务，chain_status 跟随 status
-            new_chain_status = "completed"
-        elif has_pending:
-            # 有子任务未完成
-            new_chain_status = "processing"
-        else:
-            # 所有子任务都已完成
-            new_chain_status = "completed"
+            new_chain_status = "processing" if has_pending else "completed"
 
         # 更新父任务的 chain_status
-        if new_chain_status and new_chain_status != parent_message.get("chain_status"):
+        if new_chain_status != parent_message.get("chain_status"):
             parent_message["chain_status"] = new_chain_status
             parent_message["updated_at"] = time.time()
             await redis.hset(
@@ -300,19 +303,25 @@ class RedisQueue(Queue):
 
             # 递归检查父任务的父任务
             if parent_message.get("parent_id"):
-                await self._update_parent_chain_status(redis, parent_message["parent_id"], all_messages)
+                await self._update_parent_chain_status(redis, parent_message["parent_id"])
 
 
 
     async def clear_all(self):
-        """清空所有消息"""
+        """清空所有消息和索引"""
         async with self._pool.acquire() as redis:
+            # 获取所有任务 ID，清理对应的子任务索引
+            all_messages = await redis.hgetall(self._get_key("messages"))
+            for msg_id in all_messages.keys():
+                await redis.delete(self._get_children_key(int(msg_id)))
+
+            # 清空队列数据
             await redis.delete(
                 self._get_key("pending"),
                 self._get_key("messages"),
                 self._get_key("counter")
             )
-            logger.warning("Cleared all messages from queue")
+            logger.warning("Cleared all messages and indexes from queue")
 
     async def close(self):
         """
