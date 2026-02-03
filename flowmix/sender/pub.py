@@ -17,7 +17,7 @@ Pub - 任务发布器（Sender 模块）
 import logging
 from typing import Dict, Any, Optional
 
-from ..common.queue import Queue
+from ..common.queue import Queue, create_queue_from_url
 
 
 class Pub:
@@ -28,13 +28,12 @@ class Pub:
     - 提交任务到队列
 
     Example:
-        # 使用 SQLite 队列
-        from flowmix.common import SQLitePool, SQLiteQueue
+        # 推荐方式：使用 URL（自动创建队列）
         from flowmix.sender import Pub
 
-        pool = await SQLitePool.get_instance('.flowmix/flowmix.db')
-        queue = SQLiteQueue(pool=pool, queue_name='tasks')
-        pub = Pub(queue=queue)
+        pub = await Pub.create(url="redis://localhost:6379/0", queue_name="tasks")
+        # 或使用内存队列
+        pub = await Pub.create(url="memory://", queue_name="tasks")
 
         # 提交任务
         task_id = await pub.push(
@@ -43,24 +42,79 @@ class Pub:
             priority=10
         )
 
-        # 使用 Redis 队列
-        from flowmix.common import RedisPool, RedisQueue
-        from flowmix.sender import Pub
+        # 高级用法：直接传入 Queue 实例
+        from flowmix.common.queue import RedisQueue, RedisPool
 
         pool = await RedisPool.get_instance('redis://localhost:6379/0')
         queue = RedisQueue(pool=pool, queue_name='tasks')
         pub = Pub(queue=queue)
     """
 
-    def __init__(self, queue: Queue):
+    def __init__(self, queue: Optional[Queue] = None, url: Optional[str] = None, queue_name: str = "tasks"):
         """
-        初始化 Pub
+        初始化 Pub（不推荐直接调用，建议使用 Pub.create()）
 
         Args:
-            queue: Queue 实例（SQLiteQueue 或 RedisQueue）
+            queue: Queue 实例（高级用法，直接传入队列对象）
+            url: 队列 URL（推荐方式，如 "redis://..." 或 "memory://"）
+            queue_name: 队列名称（仅当使用 url 时有效）
+
+        Raises:
+            ValueError: 如果 queue 和 url 都未提供
         """
+        if queue is None and url is None:
+            raise ValueError(
+                "Either 'queue' or 'url' must be provided. "
+                "Recommended usage: pub = await Pub.create(url='redis://localhost:6379/0')"
+            )
+
+        if queue is not None and url is not None:
+            raise ValueError("Cannot provide both 'queue' and 'url'. Please use only one.")
+
         self._queue = queue
+        self._url = url
+        self._queue_name = queue_name
+        self._initialized = queue is not None  # 如果传入了 queue，则已初始化
         self.logger = logging.getLogger(__name__)
+
+    @classmethod
+    async def create(cls, url: str, queue_name: str = "tasks") -> "Pub":
+        """
+        创建 Pub 实例（推荐方式）
+
+        Args:
+            url: 队列 URL
+                - redis://localhost:6379/0 (Redis)
+                - rediss://localhost:6379/0 (Redis SSL/TLS)
+                - memory:// (内存队列，适合测试)
+            queue_name: 队列名称
+
+        Returns:
+            Pub 实例
+
+        Example:
+            # Redis 队列
+            pub = await Pub.create(url="redis://localhost:6379/0", queue_name="tasks")
+
+            # 内存队列
+            pub = await Pub.create(url="memory://", queue_name="tasks")
+
+            # 提交任务
+            task_id = await pub.push(
+                data={"url": "http://example.com"},
+                task_name="crawl"
+            )
+        """
+        queue = await create_queue_from_url(url, queue_name)
+        return cls(queue=queue)
+
+    async def _ensure_initialized(self):
+        """确保队列已初始化（延迟初始化）"""
+        if not self._initialized:
+            if self._url is None:
+                raise RuntimeError("Pub is not initialized. Use Pub.create() or provide a queue.")
+            self._queue = await create_queue_from_url(self._url, self._queue_name)
+            self._initialized = True
 
     async def push(
         self,
@@ -120,6 +174,9 @@ class Pub:
             - 返回的 ID 可用作其他任务的 parent_id
             - 优先级建议: DFS=10, BFS=0, 默认=5
         """
+        # 确保队列已初始化
+        await self._ensure_initialized()
+
         # 验证 data 是字典
         if not isinstance(data, dict):
             raise ValueError(

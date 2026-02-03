@@ -58,11 +58,9 @@ async def execute_print(data):
 
 ```python
 from flowmix.sender import Pub
-from flowmix.common.queue import MemoryQueue
 
-# 创建队列和发布器
-queue = MemoryQueue(queue_name="tasks")
-pub = Pub(queue=queue)
+# 创建发布器（自动创建队列）
+pub = await Pub.create(url="memory://", queue_name="tasks")
 
 # 推送任务
 task_id = await pub.push(
@@ -72,6 +70,7 @@ task_id = await pub.push(
 ```
 
 **关键点**:
+- `url="memory://"` 适合单进程测试，`url="redis://localhost:6379/0"` 适合生产环境
 - `task_name` 必须和 `Task(name='...')` 匹配
 - `data` 是传给 `@task.execute` 函数的参数
 - 返回的 `task_id` 可用于追踪任务
@@ -107,7 +106,6 @@ await runner.run()
 import asyncio
 from flowmix import Task, TaskRunner, RunnerConfig
 from flowmix.sender import Pub
-from flowmix.common.queue import MemoryQueue
 
 # 1. 定义 Task
 task = Task(name='greet')
@@ -120,8 +118,7 @@ async def greet(data):
 
 # 2. 推送任务
 async def main():
-    queue = MemoryQueue(queue_name="tasks")
-    pub = Pub(queue=queue)
+    pub = await Pub.create(url="memory://", queue_name="tasks")
 
     # 推送 3 个任务
     await pub.push(data={"name": "Alice"}, task_name="greet")
@@ -250,7 +247,7 @@ async def api_call(data):
 ```python
 from flowmix.sender import Cron
 
-cron = Cron(queue=queue)
+cron = await Cron.create(url="redis://localhost:6379/0", queue_name="tasks")
 
 # 每小时执行
 cron.add_interval(

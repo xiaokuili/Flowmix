@@ -15,7 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from ..common.queue import Queue
+from ..common.queue import Queue, create_queue_from_url
 
 
 class Cron:
@@ -26,13 +26,12 @@ class Cron:
     - 定时提交任务到队列
 
     Example:
-        # 初始化
-        from flowmix.common import SQLitePool, SQLiteQueue
+        # 推荐方式：使用 URL（自动创建队列）
         from flowmix.sender import Cron
 
-        pool = await SQLitePool.get_instance('.flowmix/flowmix.db')
-        queue = SQLiteQueue(pool=pool, queue_name='tasks')
-        cron = Cron(queue=queue)
+        cron = await Cron.create(url="redis://localhost:6379/0", queue_name="tasks")
+        # 或使用内存队列
+        cron = await Cron.create(url="memory://", queue_name="tasks")
 
         # 每小时提交一次任务
         cron.add_interval(
@@ -56,16 +55,76 @@ class Cron:
         await cron.stop()
     """
 
-    def __init__(self, queue: Queue):
+    def __init__(self, queue: Optional[Queue] = None, url: Optional[str] = None, queue_name: str = "tasks"):
         """
-        初始化 Cron
+        初始化 Cron（不推荐直接调用，建议使用 Cron.create()）
 
         Args:
-            queue: Queue 实例（SQLiteQueue 或 RedisQueue）
+            queue: Queue 实例（高级用法，直接传入队列对象）
+            url: 队列 URL（推荐方式，如 "redis://..." 或 "memory://"）
+            queue_name: 队列名称（仅当使用 url 时有效）
+
+        Raises:
+            ValueError: 如果 queue 和 url 都未提供
         """
+        if queue is None and url is None:
+            raise ValueError(
+                "Either 'queue' or 'url' must be provided. "
+                "Recommended usage: cron = await Cron.create(url='redis://localhost:6379/0')"
+            )
+
+        if queue is not None and url is not None:
+            raise ValueError("Cannot provide both 'queue' and 'url'. Please use only one.")
+
         self._queue = queue
+        self._url = url
+        self._queue_name = queue_name
+        self._initialized = queue is not None  # 如果传入了 queue，则已初始化
         self._scheduler = AsyncIOScheduler()
         self.logger = logging.getLogger(__name__)
+
+    @classmethod
+    async def create(cls, url: str, queue_name: str = "tasks") -> "Cron":
+        """
+        创建 Cron 实例（推荐方式）
+
+        Args:
+            url: 队列 URL
+                - redis://localhost:6379/0 (Redis)
+                - rediss://localhost:6379/0 (Redis SSL/TLS)
+                - memory:// (内存队列，适合测试)
+            queue_name: 队列名称
+
+        Returns:
+            Cron 实例
+
+        Example:
+            # Redis 队列
+            cron = await Cron.create(url="redis://localhost:6379/0", queue_name="tasks")
+
+            # 内存队列
+            cron = await Cron.create(url="memory://", queue_name="tasks")
+
+            # 每小时提交一次任务
+            cron.add_interval(
+                task_name="hourly_task",
+                data_fn=lambda: {"timestamp": time.time()},
+                hours=1
+            )
+
+            # 启动调度器
+            cron.start()
+        """
+        queue = await create_queue_from_url(url, queue_name)
+        return cls(queue=queue)
+
+    async def _ensure_initialized(self):
+        """确保队列已初始化（延迟初始化）"""
+        if not self._initialized:
+            if self._url is None:
+                raise RuntimeError("Cron is not initialized. Use Cron.create() or provide a queue.")
+            self._queue = await create_queue_from_url(self._url, self._queue_name)
+            self._initialized = True
 
     def add_interval(
         self,
@@ -284,6 +343,9 @@ class Cron:
             priority: 优先级
         """
         try:
+            # 确保队列已初始化
+            await self._ensure_initialized()
+
             data = data_fn()
             task_id = await self._queue.push(
                 data=data,

@@ -11,9 +11,11 @@ Queue - 队列模块
 from .base import Queue
 from .redis import RedisQueue
 from .memory import MemoryQueue
+from .factory import create_queue_from_url
 
 __all__ = [
     "Queue",
     "RedisQueue",
     "MemoryQueue",
+    "create_queue_from_url",
 ]
