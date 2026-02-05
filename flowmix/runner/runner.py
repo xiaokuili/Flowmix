@@ -179,7 +179,7 @@ class TaskRunner:
             self._cache = None
             return
 
-        from ..common.pool import RedisPool, SQLitePool
+        from ..common.pool import RedisPool
 
         parsed = urlparse(self._cache_url)
         scheme = parsed.scheme
