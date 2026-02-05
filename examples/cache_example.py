@@ -15,7 +15,7 @@ from flowmix.sender import Pub
 
 
 # 1. 定义 Task（启用去重功能）
-fetch_task = Task(name='fetch', dedup=True)
+fetch_task = Task(name='fetch', dedup=True, dedup_ttl=3)
 
 # 用于追踪任务实际执行次数
 execution_count = 0
@@ -76,13 +76,15 @@ async def main():
 
     urls = [
         "http://example.com/page1",
-        "http://example.com/page2",
-        "http://example.com/page1",  # 重复
-        "http://example.com/page3",
-        "http://example.com/page2",  # 重复
-        "http://example.com/page1",  # 重复
-        "http://example.com/page4",
-        "http://example.com/page3",  # 重复
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
+        "http://example.com/page1",
     ]
 
     for i, url in enumerate(urls):

@@ -23,7 +23,6 @@ class Queue(ABC):
 
     子类需要实现：
     - Redis: 基于 RedisPool
-    - SQLite: 基于 SQLitePool
     """
 
     @abstractmethod
