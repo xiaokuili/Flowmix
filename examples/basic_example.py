@@ -25,9 +25,9 @@ async def execute_print(data):
 
 
 @print_task.on_success
-async def on_success(data, result):
+async def on_success(data, result, msg_id):
     """任务成功回调"""
-    print(f"✅ Success: {result['message']}")
+    print(f"✅ Success: {result['message']}, msg_id: {msg_id}")
 
 
 @print_task.on_failure

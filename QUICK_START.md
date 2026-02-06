@@ -172,12 +172,12 @@ async def fetch(data):
     return await httpx.get(url)
 
 @task.on_success
-async def on_success(data, result):
-    print(f"✅ Success: {data['url']}")
+async def on_success(data, result, msg_id=None):
+    print(f"✅ Task {msg_id}: {data['url']}")
 
 @task.on_failure
-async def on_failure(data, error):
-    print(f"❌ Failed: {data['url']} - {error}")
+async def on_failure(data, error, msg_id=None):
+    print(f"❌ Task {msg_id}: {data['url']} - {error}")
 ```
 
 ### 场景 2: 动态任务提交（递归任务）

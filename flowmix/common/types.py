@@ -232,16 +232,26 @@ class WorkerInfo(TypedDict):
 # 回调函数类型 (Callback Types)
 # ============================================================================
 
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Union
 
 # Task.execute 装饰的函数类型
 TaskExecuteFunc = Callable[[dict[str, Any]], Awaitable[Optional[dict[str, Any]]]]
 
 # Task.on_success 装饰的函数类型
-TaskSuccessFunc = Callable[[dict[str, Any], dict[str, Any]], Awaitable[None]]
+TaskSuccessFunc = Union[
+    Callable[[dict[str, Any], dict[str, Any]], Awaitable[None]],
+    Callable[[dict[str, Any], dict[str, Any]], None],
+    Callable[[dict[str, Any], dict[str, Any], int], Awaitable[None]],
+    Callable[[dict[str, Any], dict[str, Any], int], None],
+]
 
 # Task.on_failure 装饰的函数类型
-TaskFailureFunc = Callable[[dict[str, Any], TaskError], Awaitable[None]]
+TaskFailureFunc = Union[
+    Callable[[dict[str, Any], TaskError], Awaitable[None]],
+    Callable[[dict[str, Any], TaskError], None],
+    Callable[[dict[str, Any], TaskError, int], Awaitable[None]],
+    Callable[[dict[str, Any], TaskError, int], None],
+]
 
 # Cron 的 data_fn 类型
 CronDataFunc = Callable[[], dict[str, Any]]

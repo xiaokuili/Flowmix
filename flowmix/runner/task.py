@@ -123,7 +123,9 @@ class Task:
         self.dedup_ttl = dedup_ttl
         self._execute_func: Optional[Callable[[dict], Any]] = None
         self._on_success_func: Optional[Callable[[dict, Any], None]] = None
+        self._on_success_param_count: Optional[int] = None
         self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
+        self._on_failure_param_count: Optional[int] = None
 
         # 运行时依赖（由 TaskRunner 注入）
         # AI 注意: 这些属性不是初始化参数，而是运行时依赖
@@ -173,9 +175,10 @@ class Task:
         在 execute() 成功执行后调用
 
         Args:
-            func: 成功回调 (data: dict, result: Any) -> None
+            func: 成功回调 (data: dict, result: Any[, msg_id: int]) -> None
                  - data: 输入数据
                  - result: execute() 的返回值
+                 - msg_id: 可选任务消息 ID（函数签名包含第三个参数时自动传入）
 
         Returns:
             原函数（支持装饰器语法）
@@ -184,9 +187,18 @@ class Task:
             @task.on_success
             def my_success(data, result):
                 save_to_db(result)
-                print(f"Processed {data['url']}")
+
+            @task.on_success
+            def my_success_with_id(data, result, msg_id):
+                save_to_db(result, task_id=msg_id)
+                print(f"Processed task {msg_id}")
         """
         self._on_success_func = func
+        try:
+            self._on_success_param_count = len(inspect.signature(func).parameters)
+        except (TypeError, ValueError):
+            # Fallback when signature inspection fails (e.g., builtins)
+            self._on_success_param_count = None
         return func
 
     def on_failure(self, func: Callable[[dict, Exception], None]) -> Callable:
@@ -196,9 +208,10 @@ class Task:
         在 execute() 抛出异常时调用
 
         Args:
-            func: 失败回调 (data: dict, error: Exception) -> None
+            func: 失败回调 (data: dict, error: Exception[, msg_id: int]) -> None
                  - data: 输入数据
                  - error: 异常对象
+                 - msg_id: 可选任务消息 ID（函数签名包含第三个参数时自动传入）
 
         Returns:
             原函数（支持装饰器语法）
@@ -207,9 +220,16 @@ class Task:
             @task.on_failure
             def my_failure(data, error):
                 print(f"Failed: {error}")
-                alert_admin(data['url'], error)
+
+            @task.on_failure
+            def my_failure_with_id(data, error, msg_id):
+                alert_admin(task_id=msg_id, error=error)
         """
         self._on_failure_func = func
+        try:
+            self._on_failure_param_count = len(inspect.signature(func).parameters)
+        except (TypeError, ValueError):
+            self._on_failure_param_count = None
         return func
 
     async def callback(
@@ -324,10 +344,19 @@ class Task:
 
             # 调用成功回调（支持同步和异步）
             if self._on_success_func:
+                params = self._on_success_param_count or 0
+                include_msg_id = params >= 3
+
                 if inspect.iscoroutinefunction(self._on_success_func):
-                    await self._on_success_func(data, result)
+                    if include_msg_id:
+                        await self._on_success_func(data, result, msg_id)
+                    else:
+                        await self._on_success_func(data, result)
                 else:
-                    self._on_success_func(data, result)
+                    if include_msg_id:
+                        self._on_success_func(data, result, msg_id)
+                    else:
+                        self._on_success_func(data, result)
 
             return result
 
@@ -335,10 +364,19 @@ class Task:
             # 调用失败回调（支持同步和异步）
             if self._on_failure_func:
                 try:
+                    params = self._on_failure_param_count or 0
+                    include_msg_id = params >= 3
+
                     if inspect.iscoroutinefunction(self._on_failure_func):
-                        await self._on_failure_func(data, error)
+                        if include_msg_id:
+                            await self._on_failure_func(data, error, msg_id)
+                        else:
+                            await self._on_failure_func(data, error)
                     else:
-                        self._on_failure_func(data, error)
+                        if include_msg_id:
+                            self._on_failure_func(data, error, msg_id)
+                        else:
+                            self._on_failure_func(data, error)
                 except Exception as callback_error:
                     # 如果回调本身失败，记录但不影响原始异常
                     print(f"Warning: on_failure callback raised exception: {callback_error}")
