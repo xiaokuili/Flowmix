@@ -41,6 +41,13 @@ class RunnerConfig:
         limiter_url: 限流器 URL（默认为 None，使用内存限流器）
                      - None: 使用 MemoryRateLimiter（基于内存，单机）
                      - redis://... 或 rediss://...: 使用 RedisRateLimiter（基于 Redis，分布式）
+        execution_timeout: 单个任务最大执行时长（秒）
+                          - None: 不限制执行时长
+                          - >0: 超时后标记任务失败
+        recover_processing_on_start: 启动时是否恢复 processing 中的任务
+                                     - True: 自动回滚到 pending，防止重启丢任务
+        processing_stale_after: 恢复 processing 任务的最小停滞时长（秒）
+                                - 0: 恢复所有 processing 任务
     """
 
     num_workers: int = 1
@@ -48,6 +55,9 @@ class RunnerConfig:
     retry_delay: float = 0
     name: Optional[str] = None
     limiter_url: Optional[str] = None
+    execution_timeout: Optional[float] = None
+    recover_processing_on_start: bool = True
+    processing_stale_after: float = 0.0
 
 
 class TaskRunner:
@@ -282,7 +292,17 @@ class TaskRunner:
             max_retries=self.config.max_retries,
             retry_delay=self.config.retry_delay,
             stop_event=self._stop_event,
+            execution_timeout=self.config.execution_timeout,
         )
+
+        if self.config.recover_processing_on_start:
+            recovered = await self._queue.recover_processing_tasks(
+                stale_after=self.config.processing_stale_after
+            )
+            if recovered > 0:
+                self.logger.warning(
+                    f"Recovered {recovered} processing tasks back to pending queue"
+                )
 
         # 注册信号处理
         try:

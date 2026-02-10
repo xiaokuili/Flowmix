@@ -202,6 +202,42 @@ class RedisQueue(Queue):
             if message["status"] in ("completed", "failed"):
                 await self._update_chain_status_if_done(redis, message_id, parent_id)
 
+    async def recover_processing_tasks(self, stale_after: float = 0.0) -> int:
+        """恢复 processing 状态任务到 pending 队列"""
+        async with self._pool.acquire() as redis:
+            all_messages = await redis.hgetall(self._get_key("messages"))
+            now = time.time()
+            recovered = 0
+
+            for msg_id_raw, msg_json in all_messages.items():
+                msg_id = int(msg_id_raw)
+                message = json.loads(msg_json)
+
+                if message.get("status") != "processing":
+                    continue
+
+                last_update = message.get("updated_at", message.get("created_at", now))
+                if stale_after > 0 and (now - last_update) < stale_after:
+                    continue
+
+                priority = int(message.get("priority", 0))
+                message["status"] = "pending"
+                message.pop("consumer", None)
+                message["updated_at"] = now
+
+                await redis.hset(
+                    self._get_key("messages"),
+                    msg_id,
+                    json.dumps(message)
+                )
+                await redis.zadd(
+                    self._get_key("pending"),
+                    {str(msg_id): -priority * 1e10 + msg_id}
+                )
+                recovered += 1
+
+            return recovered
+
     async def _update_chain_status_if_done(self, redis, task_id: int, parent_id: Optional[int]):
         """
         更新任务（及其父任务）的 chain_status

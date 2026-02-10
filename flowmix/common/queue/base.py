@@ -111,6 +111,20 @@ class Queue(ABC):
         """
         pass
 
+    @abstractmethod
+    async def recover_processing_tasks(self, stale_after: float = 0.0) -> int:
+        """
+        恢复 processing 状态的任务到 pending
+
+        Args:
+            stale_after: 仅恢复处理时长超过该秒数的任务。
+                        0 表示恢复所有 processing 任务。
+
+        Returns:
+            恢复的任务数量
+        """
+        pass
+
 
     @abstractmethod
     async def clear_all(self):

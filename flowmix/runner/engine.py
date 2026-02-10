@@ -40,7 +40,8 @@ class TaskEngine:
         queue: Queue,
         max_retries: int = 0,
         retry_delay: float = 0,
-        stop_event: Optional[asyncio.Event] = None
+        stop_event: Optional[asyncio.Event] = None,
+        execution_timeout: Optional[float] = None,
     ):
         """
         初始化 TaskEngine
@@ -52,6 +53,7 @@ class TaskEngine:
             max_retries: 最大重试次数
             retry_delay: 重试延迟（秒）
             stop_event: 停止事件（用于取消任务）
+            execution_timeout: 单任务执行超时（秒）
         """
         self._cache = cache
         self._limiter = limiter
@@ -59,6 +61,7 @@ class TaskEngine:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self._stop_event = stop_event
+        self.execution_timeout = execution_timeout
         self.logger = logging.getLogger(__name__)
 
     async def execute(
@@ -117,32 +120,45 @@ class TaskEngine:
                     await self._limiter.acquire(task_name, task.concurrency_limit)
 
                 try:
-                    # 执行任务（支持取消）
-                    if self._stop_event:
-                        # 创建任务并等待完成或停止信号
-                        task_future = asyncio.create_task(task.run(task_data, msg_id=msg_id))
-                        stop_task = asyncio.create_task(self._stop_event.wait())
+                    async def run_task_with_controls():
+                        # 执行任务（支持停止信号取消）
+                        if self._stop_event:
+                            task_future = asyncio.create_task(task.run(task_data, msg_id=msg_id))
+                            stop_task = asyncio.create_task(self._stop_event.wait())
 
-                        done, pending = await asyncio.wait(
-                            {task_future, stop_task},
-                            return_when=asyncio.FIRST_COMPLETED
-                        )
+                            done, pending = await asyncio.wait(
+                                {task_future, stop_task},
+                                return_when=asyncio.FIRST_COMPLETED
+                            )
 
-                        # 取消未完成的任务
-                        for p in pending:
-                            p.cancel()
+                            for pending_task in pending:
+                                pending_task.cancel()
 
-                        # 检查是哪个任务完成了
-                        if task_future in done:
-                            # 任务正常完成
-                            result = task_future.result()
-                        else:
-                            # 停止信号到达，任务被取消
-                            self.logger.warning(f"[{worker_name}] Task '{task_name}' {msg_id} cancelled due to shutdown")
+                            if task_future in done:
+                                return task_future.result()
+
+                            task_future.cancel()
+                            await asyncio.gather(task_future, return_exceptions=True)
+                            self.logger.warning(
+                                f"[{worker_name}] Task '{task_name}' {msg_id} cancelled due to shutdown"
+                            )
                             raise asyncio.CancelledError("Task cancelled due to shutdown")
+
+                        return await task.run(task_data, msg_id=msg_id)
+
+                    # 超时控制：超时后抛异常，走 failed/retry 逻辑
+                    if self.execution_timeout is not None and self.execution_timeout > 0:
+                        try:
+                            result = await asyncio.wait_for(
+                                run_task_with_controls(),
+                                timeout=self.execution_timeout
+                            )
+                        except asyncio.TimeoutError as exc:
+                            raise TimeoutError(
+                                f"Task execution timed out after {self.execution_timeout}s"
+                            ) from exc
                     else:
-                        # 没有停止事件，正常执行
-                        result = await task.run(task_data, msg_id=msg_id)
+                        result = await run_task_with_controls()
 
                     # 生成指纹（用于去重）
                     fingerprint = None

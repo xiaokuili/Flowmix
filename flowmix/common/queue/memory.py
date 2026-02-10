@@ -126,6 +126,28 @@ class MemoryQueue(Queue):
         if message_id in processing:
             del processing[message_id]
 
+    async def recover_processing_tasks(self, stale_after: float = 0.0) -> int:
+        """将 processing 任务重新放回队列"""
+        now = asyncio.get_event_loop().time()
+        processing = self._state["_processing"]
+        queue = self._state["_queue"]
+
+        to_recover = []
+        for msg_id, record in list(processing.items()):
+            started_at = record.get("started_at", now)
+            elapsed = now - started_at
+            if stale_after <= 0 or elapsed >= stale_after:
+                to_recover.append((msg_id, record["message"]))
+
+        # 按原消息优先级排序后重新入队
+        to_recover.sort(key=lambda item: item[1].get("priority", 0), reverse=True)
+
+        for msg_id, message in to_recover:
+            await queue.put(message)
+            del processing[msg_id]
+
+        return len(to_recover)
+
     async def size(self) -> int:
         """获取队列大小"""
         return self._state["_queue"].qsize()

@@ -51,6 +51,20 @@ runner = TaskRunner(
 await runner.run()
 ```
 
+### 运行稳定性配置（重启回滚 / 超时失败）
+
+```python
+runner = TaskRunner(
+    tasks={"greet": task},
+    url="redis://localhost:6379/0",
+    config=RunnerConfig(
+        execution_timeout=300,          # 单任务执行超时（秒），超时自动标记 failed
+        recover_processing_on_start=True,
+        processing_stale_after=0,       # 启动时回滚 processing 到 pending
+    ),
+)
+```
+
 ---
 
 ## ✨ 特性 (Features)
