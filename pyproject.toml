@@ -41,3 +41,6 @@ all = ["aiohttp>=3.8", "openai>=1.0", "redis>=5.0.0", "asyncpg>=0.28"]
 
 [tool.setuptools]
 packages = {find = {}}
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"

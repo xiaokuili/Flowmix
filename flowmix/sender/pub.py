@@ -177,6 +177,9 @@ class Pub:
         # 确保队列已初始化
         await self._ensure_initialized()
 
+        if self._queue is None:
+            raise RuntimeError("Pub queue is not initialized")
+
         # 验证 data 是字典
         if not isinstance(data, dict):
             raise ValueError(

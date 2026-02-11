@@ -11,7 +11,7 @@ RedisStats - 基于 Redis 的统计查询实现
 import json
 import logging
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, cast
 from datetime import datetime
 
 import redis.asyncio as aioredis
@@ -46,7 +46,8 @@ class RedisDataAccess:
 
     async def get_all_messages(self) -> Dict[int, Dict[str, Any]]:
         """获取所有消息并解析"""
-        messages = await self._redis.hgetall(self._get_key("messages"))
+        redis_client = cast(Any, self._redis)
+        messages = await redis_client.hgetall(self._get_key("messages"))
 
         result = {}
         for msg_id, msg_json in messages.items():
@@ -61,20 +62,59 @@ class RedisDataAccess:
 
     def message_to_task_info(self, message: Dict[str, Any]) -> TaskInfo:
         """将消息转换为 TaskInfo"""
+        task_id = message.get('id')
+        if not isinstance(task_id, int):
+            task_id = 0
+
+        priority = message.get('priority')
+        if not isinstance(priority, int):
+            priority = 0
+
+        status = message.get('status')
+        if not isinstance(status, str) or not status:
+            status = 'pending'
+
+        chain_status = message.get('chain_status')
+        if not isinstance(chain_status, str) or not chain_status:
+            chain_status = 'pending'
+
+        task_name = message.get('task_name')
+        if not isinstance(task_name, str):
+            task_name = None
+
+        parent_id = message.get('parent_id')
+        if parent_id is not None and not isinstance(parent_id, int):
+            parent_id = None
+
+        worker_id = message.get('consumer')
+        if not isinstance(worker_id, str):
+            worker_id = None
+
+        error = message.get('error')
+        if not isinstance(error, str):
+            error = None
+
+        fingerprint = message.get('fingerprint')
+        if not isinstance(fingerprint, str):
+            fingerprint = None
+
+        created_at = self._format_timestamp(message.get('created_at')) or ''
+        updated_at = self._format_timestamp(message.get('updated_at')) or ''
+
         return {
-            'id': message.get('id'),
-            'parent_id': message.get('parent_id'),
-            'task_name': message.get('task_name'),
+            'id': task_id,
+            'parent_id': parent_id,
+            'task_name': task_name,
             'data': self._parse_json_field(message.get('data', '{}')),
-            'priority': message.get('priority', 0),
-            'status': message.get('status', 'pending'),
-            'chain_status': message.get('chain_status', 'pending'),
-            'worker_id': message.get('consumer'),
-            'error': message.get('error'),
+            'priority': priority,
+            'status': status,
+            'chain_status': chain_status,
+            'worker_id': worker_id,
+            'error': error,
             'result': self._parse_json_field(message.get('result')),
-            'fingerprint': message.get('fingerprint'),
-            'created_at': self._format_timestamp(message.get('created_at')),
-            'updated_at': self._format_timestamp(message.get('updated_at')),
+            'fingerprint': fingerprint,
+            'created_at': created_at,
+            'updated_at': updated_at,
             'completed_at': self._format_timestamp(message.get('completed_at'))
         }
 
@@ -109,8 +149,9 @@ class RedisTaskQuery(TaskQuery):
 
     async def get_task(self, task_id: int) -> Optional[TaskInfo]:
         """获取单个任务的详细信息"""
-        msg_json = await self._data._redis.hget(
-            self._data._get_key("messages"), task_id
+        redis_client = cast(Any, self._data._redis)
+        msg_json = await redis_client.hget(
+            self._data._get_key("messages"), str(task_id)
         )
 
         if not msg_json:
@@ -165,8 +206,8 @@ class RedisTaskQuery(TaskQuery):
             if task_id in messages:
                 stats['total'] += 1
                 status = messages[task_id].get('status', 'pending')
-                if status in stats:
-                    stats[status] += 1
+                if isinstance(status, str) and status in stats:
+                    stats[cast(Any, status)] += 1
 
         return stats
 

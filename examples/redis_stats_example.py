@@ -171,12 +171,12 @@ async def query_stats(stats: RedisStats):
     task = await stats.task.get_task(task_id=1)
     if task:
         print(f"\n任务 #1 详情:")
-        print(f"  任务名: {task['task_name']}")
-        print(f"  状态: {task['status']}")
+        print(f"  任务名: {task.get('task_name', 'N/A')}")
+        print(f"  状态: {task.get('status', 'N/A')}")
         print(f"  Worker: {task.get('worker_id', 'N/A')}")
-        print(f"  创建时间: {task['created_at']}")
+        print(f"  创建时间: {task.get('created_at', 'N/A')}")
         if task.get('completed_at'):
-            print(f"  完成时间: {task['completed_at']}")
+            print(f"  完成时间: {task.get('completed_at')}")
 
     # 查询任务链统计（假设任务 1 是根任务）
     summary = await stats.task.get_chain_summary(root_id=1)
@@ -195,14 +195,14 @@ async def query_stats(stats: RedisStats):
 
     perf = await stats.runner.get_performance()
     print(f"\n整体性能指标:")
-    print(f"  总任务数: {perf['total']}")
-    print(f"  已完成: {perf['completed']}")
-    print(f"  失败: {perf['failed']}")
-    print(f"  待处理: {perf['pending']}")
-    print(f"  处理中: {perf['processing']}")
-    print(f"  成功率: {perf['success_rate']*100:.2f}%")
-    print(f"  吞吐量: {perf['qps']:.2f} tasks/s")
-    print(f"  平均执行时长: {perf['avg_duration_seconds']:.2f} 秒")
+    print(f"  总任务数: {perf.get('total', 0)}")
+    print(f"  已完成: {perf.get('completed', 0)}")
+    print(f"  失败: {perf.get('failed', 0)}")
+    print(f"  待处理: {perf.get('pending', 0)}")
+    print(f"  处理中: {perf.get('processing', 0)}")
+    print(f"  成功率: {perf.get('success_rate', 0.0)*100:.2f}%")
+    print(f"  吞吐量: {perf.get('qps', 0.0):.2f} tasks/s")
+    print(f"  平均执行时长: {perf.get('avg_duration_seconds', 0.0):.2f} 秒")
 
     # ========================================================================
     # 3. 按任务类型统计
@@ -214,11 +214,11 @@ async def query_stats(stats: RedisStats):
     print(f"\n任务类型性能对比:")
     for task_type, task_stats in by_type.items():
         print(f"\n  {task_type}:")
-        print(f"    总数: {task_stats['total']}")
-        print(f"    完成: {task_stats['completed']}")
-        print(f"    失败: {task_stats['failed']}")
-        print(f"    成功率: {task_stats['success_rate']*100:.2f}%")
-        print(f"    平均耗时: {task_stats['avg_duration_seconds']:.2f} 秒")
+        print(f"    总数: {task_stats.get('total', 0)}")
+        print(f"    完成: {task_stats.get('completed', 0)}")
+        print(f"    失败: {task_stats.get('failed', 0)}")
+        print(f"    成功率: {task_stats.get('success_rate', 0.0)*100:.2f}%")
+        print(f"    平均耗时: {task_stats.get('avg_duration_seconds', 0.0):.2f} 秒")
 
     # ========================================================================
     # 4. Worker 信息
@@ -229,52 +229,20 @@ async def query_stats(stats: RedisStats):
     workers = await stats.runner.list_workers()
     print(f"\nWorker 列表 (共 {len(workers)} 个):")
     for w in workers:
-        status_emoji = "🟢" if w['is_active'] else "🔴"
-        success_rate = (w['completed'] / w['total_tasks'] * 100) if w['total_tasks'] > 0 else 0
-        print(f"\n  {status_emoji} {w['worker_id']}:")
-        print(f"     总任务: {w['total_tasks']} | 完成: {w['completed']} | 失败: {w['failed']}")
+        total_tasks = w.get('total_tasks', 0)
+        completed = w.get('completed', 0)
+        failed = w.get('failed', 0)
+        status_emoji = "🟢" if w.get('is_active', False) else "🔴"
+        success_rate = (completed / total_tasks * 100) if total_tasks > 0 else 0
+        print(f"\n  {status_emoji} {w.get('worker_id', 'unknown')}:")
+        print(f"     总任务: {total_tasks} | 完成: {completed} | 失败: {failed}")
         print(f"     成功率: {success_rate:.1f}%")
-        print(f"     首次活跃: {w['first_seen']}")
-        print(f"     最后活跃: {w['last_seen']}")
+        print(f"     首次活跃: {w.get('first_seen', 'N/A')}")
+        print(f"     最后活跃: {w.get('last_seen', 'N/A')}")
 
-    # ========================================================================
-    # 5. 实时监控
-    # ========================================================================
     print("\n【5. 实时监控】")
     print("-"*80)
-
-    # 正在处理的任务
-    processing = await stats.monitor.get_processing_tasks()
-    if processing:
-        print(f"\n正在处理的任务 (共 {len(processing)} 个):")
-        for task in processing[:5]:
-            print(f"  任务 #{task['task_id']}:")
-            print(f"    Worker: {task['worker_id']}")
-            print(f"    类型: {task['task_type']}")
-            print(f"    已执行: {task['duration_seconds']:.1f} 秒")
-    else:
-        print("\n当前没有正在处理的任务")
-
-    # 失败任务
-    failed = await stats.monitor.get_failed_tasks(limit=10)
-    if failed:
-        print(f"\n失败任务 (最近 {len(failed)} 个):")
-        for task in failed[:5]:
-            print(f"  任务 #{task['task_id']}:")
-            print(f"    类型: {task['task_type']}")
-            print(f"    错误: {task['error']}")
-            print(f"    失败时间: {task['failed_at']}")
-    else:
-        print("\n没有失败的任务")
-
-    # 错误汇总
-    errors = await stats.monitor.get_error_summary()
-    if errors:
-        print(f"\n错误汇总 (共 {len(errors)} 种错误):")
-        for error, count in list(errors.items())[:5]:
-            print(f"  [{count}次] {error}")
-    else:
-        print("\n没有错误记录")
+    print("\n当前版本 RedisStats 暂不提供 monitor 子模块，跳过该部分")
 
     # ========================================================================
     # 6. 任务链维度统计
@@ -341,8 +309,7 @@ async def main():
         config=RunnerConfig(
             num_workers=2,
             max_retries=1,
-            retry_delay=0.5,
-            log_level="WARNING"  # 降低日志级别以简化输出
+            retry_delay=0.5
         )
     )
 
@@ -354,7 +321,7 @@ async def main():
     await asyncio.sleep(2)
 
     # 5. 创建 RedisStats 并查询统计信息
-    stats = RedisStats(redis=redis, queue_name=queue_name)
+    stats = RedisStats(redis_url=redis_url, queue_name=queue_name)
 
     # 第一次查询（任务执行中）
     print("\n" + "="*80)

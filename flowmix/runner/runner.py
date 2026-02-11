@@ -14,7 +14,7 @@ import socket
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, Awaitable, cast
 from urllib.parse import urlparse
 
 from .task import Task
@@ -278,6 +278,12 @@ class TaskRunner:
         await self._setup_cache()
         await self._setup_limiter()
 
+        if self._queue is None or self._limiter is None:
+            raise RuntimeError("Runner components are not initialized")
+
+        queue = self._queue
+        limiter = self._limiter
+
         # 设置 Task 回调
         self._setup_task_callbacks()
 
@@ -287,8 +293,8 @@ class TaskRunner:
         # 初始化 TaskEngine（传入 stop_event）
         self._engine = TaskEngine(
             cache=self._cache,
-            limiter=self._limiter,
-            queue=self._queue,
+            limiter=limiter,
+            queue=queue,
             max_retries=self.config.max_retries,
             retry_delay=self.config.retry_delay,
             stop_event=self._stop_event,
@@ -296,7 +302,7 @@ class TaskRunner:
         )
 
         if self.config.recover_processing_on_start:
-            recovered = await self._queue.recover_processing_tasks(
+            recovered = await queue.recover_processing_tasks(
                 stale_after=self.config.processing_stale_after
             )
             if recovered > 0:
@@ -338,30 +344,36 @@ class TaskRunner:
         worker_name = f"{self.name}-{worker_id}"
         self.logger.debug(f"Worker {worker_name} started")
 
-        while self.running and not self._stop_event.is_set():
+        if self._queue is None or self._stop_event is None:
+            raise RuntimeError("Runner is not initialized")
+
+        queue = self._queue
+        stop_event = self._stop_event
+
+        while self.running and not stop_event.is_set():
             try:
                 # 从队列获取消息（使用 asyncio.wait_for 让它可以被中断）
                 try:
                     msg = await asyncio.wait_for(
-                        self._queue.pop(worker_name),
+                        queue.pop(worker_name),
                         timeout=0.5,  # 500ms 超时，让停止信号能及时响应
                     )
                 except asyncio.TimeoutError:
                     # 超时后检查停止信号
-                    if self._stop_event.is_set():
+                    if stop_event.is_set():
                         break
                     continue
 
                 if not msg:
                     # 检查是否需要停止
-                    if self._stop_event.is_set():
+                    if stop_event.is_set():
                         break
                     # 短暂等待，避免空转
                     await asyncio.sleep(0.1)
                     continue
 
                 # 处理消息前再次检查停止信号
-                if self._stop_event.is_set():
+                if stop_event.is_set():
                     self.logger.info(
                         f"Worker {worker_name} stopping, message {msg['id']} will be requeued"
                     )
@@ -391,7 +403,24 @@ class TaskRunner:
             worker_name: Worker 名称（用于日志）
         """
         msg_id = msg["id"]
-        task_name = msg.get("task_name")
+        task_name_raw = msg.get("task_name")
+
+        if self._queue is None or self._engine is None:
+            raise RuntimeError("Runner is not initialized")
+
+        queue = self._queue
+        engine = self._engine
+
+        if not isinstance(task_name_raw, str) or not task_name_raw:
+            self.logger.error(
+                f"Invalid task_name in message {msg_id}: {task_name_raw!r}"
+            )
+            await queue.ack(
+                msg_id, failed=True, error=f"Invalid task_name: {task_name_raw!r}"
+            )
+            return
+
+        task_name = task_name_raw
 
         # 1. 查找任务
         task = self.tasks.get(task_name)
@@ -399,16 +428,16 @@ class TaskRunner:
             self.logger.error(
                 f"Task '{task_name}' not found. Available tasks: {list(self.tasks.keys())}"
             )
-            await self._queue.ack(
+            await queue.ack(
                 msg_id, failed=True, error=f"Task '{task_name}' not found"
             )
             return
 
         # 2. 执行任务（委托给 TaskEngine）
-        result, status = await self._engine.execute(msg, task, worker_name)
+        result, status = await engine.execute(msg, task, worker_name)
 
         # 3. 确认消息
-        await self._queue.ack(
+        await queue.ack(
             msg_id,
             failed=(status == "failed"),
             error=result.get("error") if status == "failed" else None,
@@ -454,11 +483,26 @@ class TaskRunner:
 
         # 关闭 Redis 连接
         if self._limiter_redis_conn:
-            await self._limiter_redis_conn.close()
+            close_method = cast(
+                Optional[Callable[[], Awaitable[Any]]],
+                getattr(self._limiter_redis_conn, "aclose", None),
+            )
+            if callable(close_method):
+                await close_method()
         if self._cache_redis_conn:
-            await self._cache_redis_conn.close()
+            close_method = cast(
+                Optional[Callable[[], Awaitable[Any]]],
+                getattr(self._cache_redis_conn, "aclose", None),
+            )
+            if callable(close_method):
+                await close_method()
         if self._redis_conn:
-            await self._redis_conn.close()
+            close_method = cast(
+                Optional[Callable[[], Awaitable[Any]]],
+                getattr(self._redis_conn, "aclose", None),
+            )
+            if callable(close_method):
+                await close_method()
 
     def stop(self):
         """停止运行器（设置停止标志和事件）"""

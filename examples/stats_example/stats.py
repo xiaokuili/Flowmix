@@ -34,11 +34,11 @@ async def main():
     task = await stats.task.get_task(task_id=1)
     if task:
         print(f"\n任务详情:")
-        print(f"  ID: {task['id']}")
-        print(f"  任务名: {task['task_name']}")
-        print(f"  状态: {task['status']}")
-        print(f"  Worker: {task['worker_id']}")
-        print(f"  创建时间: {task['created_at']}")
+        print(f"  ID: {task.get('id', 0)}")
+        print(f"  任务名: {task.get('task_name', 'N/A')}")
+        print(f"  状态: {task.get('status', 'N/A')}")
+        print(f"  Worker: {task.get('worker_id', 'N/A')}")
+        print(f"  创建时间: {task.get('created_at', 'N/A')}")
 
     # 判断任务链是否完成
     is_completed = await stats.task.is_chain_completed(root_id=1)
@@ -74,7 +74,7 @@ async def main():
     details = await stats.task.get_chain_details(root_id=1)
     print(f"\n任务链详情 (共 {len(details)} 个任务):")
     for task in details[:5]:  # 只显示前 5 个
-        print(f"  [{task['id']}] {task['task_name']}: {task['status']}")
+        print(f"  [{task.get('id', 0)}] {task.get('task_name', 'N/A')}: {task.get('status', 'N/A')}")
 
     # ========================================================================
     # 2. Runner 执行统计 (stats.runner)
@@ -85,12 +85,12 @@ async def main():
     # 查询所有 Worker 的整体性能（任务维度）
     perf = await stats.runner.get_performance()
     print(f"\n整体性能统计（任务维度）:")
-    print(f"  总任务数: {perf['total']}")
-    print(f"  已完成: {perf['completed']}")
-    print(f"  失败: {perf['failed']}")
-    print(f"  成功率: {perf['success_rate']*100:.1f}%")
-    print(f"  吞吐量: {perf['qps']:.2f} tasks/s")
-    print(f"  平均执行时长: {perf['avg_duration_seconds']:.2f} 秒")
+    print(f"  总任务数: {perf.get('total', 0)}")
+    print(f"  已完成: {perf.get('completed', 0)}")
+    print(f"  失败: {perf.get('failed', 0)}")
+    print(f"  成功率: {perf.get('success_rate', 0.0)*100:.1f}%")
+    print(f"  吞吐量: {perf.get('qps', 0.0):.2f} tasks/s")
+    print(f"  平均执行时长: {perf.get('avg_duration_seconds', 0.0):.2f} 秒")
 
     # 查询任务链维度统计
     chain_stats = await stats.runner.get_chain_stats()
@@ -114,26 +114,26 @@ async def main():
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_perf = await stats.runner.get_performance(start_time=today)
     print(f"\n今日性能统计:")
-    print(f"  总任务数: {today_perf['total']}")
-    print(f"  成功率: {today_perf['success_rate']*100:.1f}%")
+    print(f"  总任务数: {today_perf.get('total', 0)}")
+    print(f"  成功率: {today_perf.get('success_rate', 0.0)*100:.1f}%")
 
     # 按任务类型统计
     by_type = await stats.runner.get_performance_by_task_type()
     print(f"\n按任务类型统计:")
     for task_type, task_stats in by_type.items():
         print(f"  {task_type}:")
-        print(f"    总数: {task_stats['total']}")
-        print(f"    完成: {task_stats['completed']}")
-        print(f"    成功率: {task_stats['success_rate']*100:.1f}%")
+        print(f"    总数: {task_stats.get('total', 0)}")
+        print(f"    完成: {task_stats.get('completed', 0)}")
+        print(f"    成功率: {task_stats.get('success_rate', 0.0)*100:.1f}%")
 
     # 列出所有 Worker
     workers = await stats.runner.list_workers()
     print(f"\nWorker 列表 (共 {len(workers)} 个):")
     for w in workers:
-        status_emoji = "🟢" if w['is_active'] else "🔴"
-        print(f"  {status_emoji} {w['worker_id']}:")
-        print(f"     总任务: {w['total_tasks']} | 完成: {w['completed']} | 失败: {w['failed']}")
-        print(f"     最后活跃: {w['last_seen']}")
+        status_emoji = "🟢" if w.get('is_active', False) else "🔴"
+        print(f"  {status_emoji} {w.get('worker_id', 'unknown')}:")
+        print(f"     总任务: {w.get('total_tasks', 0)} | 完成: {w.get('completed', 0)} | 失败: {w.get('failed', 0)}")
+        print(f"     最后活跃: {w.get('last_seen', 'N/A')}")
 
     # 关闭连接
     await stats.close()

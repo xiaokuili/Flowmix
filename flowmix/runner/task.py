@@ -13,7 +13,7 @@ Task - 任务定义
 import hashlib
 import inspect
 import json
-from typing import Callable, Optional, Any, TYPE_CHECKING
+from typing import Callable, Optional, Any, TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from ..sender.pub import Pub
@@ -122,9 +122,9 @@ class Task:
         self.dedup = dedup
         self.dedup_ttl = dedup_ttl
         self._execute_func: Optional[Callable[[dict], Any]] = None
-        self._on_success_func: Optional[Callable[[dict, Any], None]] = None
+        self._on_success_func: Optional[Callable[..., Any]] = None
         self._on_success_param_count: Optional[int] = None
-        self._on_failure_func: Optional[Callable[[dict, Exception], None]] = None
+        self._on_failure_func: Optional[Callable[..., Any]] = None
         self._on_failure_param_count: Optional[int] = None
 
         # 运行时依赖（由 TaskRunner 注入）
@@ -132,7 +132,7 @@ class Task:
         self._sender: Optional["Pub"] = None  # TaskRunner._setup_task_callbacks() 注入
         self._current_msg_id: Optional[int] = None  # TaskEngine.execute() 执行时设置
 
-    def execute(self, func: Callable[[dict], Any]) -> Callable:
+    def execute(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """
         注册执行函数（必须）
 
@@ -168,7 +168,7 @@ class Task:
         self._execute_func = func
         return func
 
-    def on_success(self, func: Callable[[dict, Any], None]) -> Callable:
+    def on_success(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """
         注册成功回调（可选）
 
@@ -201,7 +201,7 @@ class Task:
             self._on_success_param_count = None
         return func
 
-    def on_failure(self, func: Callable[[dict, Exception], None]) -> Callable:
+    def on_failure(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """
         注册失败回调（可选）
 
@@ -346,17 +346,18 @@ class Task:
             if self._on_success_func:
                 params = self._on_success_param_count or 0
                 include_msg_id = params >= 3
+                success_callback = cast(Any, self._on_success_func)
 
                 if inspect.iscoroutinefunction(self._on_success_func):
                     if include_msg_id:
-                        await self._on_success_func(data, result, msg_id)
+                        await success_callback(data, result, msg_id)
                     else:
-                        await self._on_success_func(data, result)
+                        await success_callback(data, result)
                 else:
                     if include_msg_id:
-                        self._on_success_func(data, result, msg_id)
+                        success_callback(data, result, msg_id)
                     else:
-                        self._on_success_func(data, result)
+                        success_callback(data, result)
 
             return result
 
@@ -366,17 +367,18 @@ class Task:
                 try:
                     params = self._on_failure_param_count or 0
                     include_msg_id = params >= 3
+                    failure_callback = cast(Any, self._on_failure_func)
 
                     if inspect.iscoroutinefunction(self._on_failure_func):
                         if include_msg_id:
-                            await self._on_failure_func(data, error, msg_id)
+                            await failure_callback(data, error, msg_id)
                         else:
-                            await self._on_failure_func(data, error)
+                            await failure_callback(data, error)
                     else:
                         if include_msg_id:
-                            self._on_failure_func(data, error, msg_id)
+                            failure_callback(data, error, msg_id)
                         else:
-                            self._on_failure_func(data, error)
+                            failure_callback(data, error)
                 except Exception as callback_error:
                     # 如果回调本身失败，记录但不影响原始异常
                     print(f"Warning: on_failure callback raised exception: {callback_error}")

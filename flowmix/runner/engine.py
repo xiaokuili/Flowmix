@@ -83,7 +83,11 @@ class TaskEngine:
             - status: "success" | "failed" | "cached"
             - result_dict: {"data": ..., "fingerprint": ..., "error": ...}
         """
-        task_name = msg.get("task_name")
+        task_name_raw = msg.get("task_name")
+        if not isinstance(task_name_raw, str) or not task_name_raw:
+            return {"error": f"Invalid task_name: {task_name_raw!r}"}, "failed"
+
+        task_name = task_name_raw
         msg_id = msg["id"]
 
         # 提取任务数据

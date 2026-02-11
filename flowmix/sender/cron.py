@@ -346,6 +346,9 @@ class Cron:
             # 确保队列已初始化
             await self._ensure_initialized()
 
+            if self._queue is None:
+                raise RuntimeError("Cron queue is not initialized")
+
             data = data_fn()
             task_id = await self._queue.push(
                 data=data,

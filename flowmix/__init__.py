@@ -50,7 +50,7 @@ from .runner.limit import (
 
 # 统计模块
 try:
-    from .stats import TaskStats
+    from .stats import Stats as TaskStats
 except ImportError:
     TaskStats = None
 
